@@ -74,6 +74,15 @@ describe('descriptionSnippet', () => {
     expect(snippet.length).toBeLessThanOrEqual(221);
   });
 
+  it('ignores image and link URLs left in ATS plain text', () => {
+    const text =
+      '[https://app.ashbyhq.com/api/images/user-content/a/b/COVER_1.png]\n\nABOUT US:\n\n' +
+      'Read [our story](https://acme.com/story) about how we help millions of people every day [https://acme.com].';
+    expect(descriptionSnippet(text)).toBe(
+      'Read our story about how we help millions of people every day.',
+    );
+  });
+
   it('handles empty descriptions', () => {
     expect(descriptionSnippet('')).toBe('');
     expect(descriptionSnippet(null)).toBe('');

@@ -54,12 +54,18 @@ const SNIPPET_LENGTH = 220;
 /** Paragraphs shorter than this are usually headings ("About us", "Location") rather than prose. */
 const MIN_PARAGRAPH = 60;
 
+/** ATS plain-text exports flatten `<a>`/`<img>` into `[label](url)` and `[url]`. */
+const MARKDOWN_LINK = /\[([^\]\n]+)\]\(https?:\/\/[^\s)]+\)/g;
+const BRACKETED_URL = /\s*\[+https?:\/\/[^\s\]]+\]/g;
+
 /** First real paragraph of a plain-text description, cut at a word boundary. */
 export function descriptionSnippet(description: string | null | undefined): string {
   if (!description) return '';
   const lines = description
     .split(/\n+/)
-    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .map((l) =>
+      l.replace(MARKDOWN_LINK, '$1').replace(BRACKETED_URL, '').replace(/\s+/g, ' ').trim(),
+    )
     .filter(Boolean);
   const text = lines.find((l) => l.length >= MIN_PARAGRAPH) ?? lines.join(' ');
   if (text.length <= SNIPPET_LENGTH) return text;
