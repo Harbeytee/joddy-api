@@ -74,7 +74,9 @@ export class AuthController {
     this.cookies.clear(res);
   }
 
+  /** Called on every page load, so it can't share the credential endpoints' tight limit. */
   @Get('me')
+  @Throttle({ default: { limit: 120, ttl: 60_000 } })
   me(@CurrentUser() user: AuthUser) {
     return this.auth.me(user.id);
   }
