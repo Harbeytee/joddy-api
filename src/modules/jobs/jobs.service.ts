@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { paginate, PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { Prisma, type Job } from '../../generated/prisma/client';
+import { Seniority } from '../../generated/prisma/enums';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DeactivateStaleDto, IngestJobDto } from './dto/ingest.dto';
 import type { JobsQueryDto } from './dto/jobs-query.dto';
@@ -18,6 +19,7 @@ const LIST_SELECT = {
   locations: true,
   workplaceType: true,
   employmentType: true,
+  seniority: true,
   salaryMin: true,
   salaryMax: true,
   salaryCurrency: true,
@@ -91,13 +93,7 @@ export class JobsService {
         select: { id: true, status: true, appliedAt: true },
       }),
     ]);
-    return {
-      ...job,
-      seniority: seniorityFromTitle(job.title),
-      match: matchJob(skills, job),
-      isSaved: !!saved,
-      application,
-    };
+    return { ...job, match: matchJob(skills, job), isSaved: !!saved, application };
   }
 
   async save(userId: string, jobId: string): Promise<void> {
@@ -146,6 +142,7 @@ export class JobsService {
       locations: j.locations ?? [],
       workplaceType: j.workplaceType ? j.workplaceType.toUpperCase() : null,
       employmentType: j.employmentType ?? null,
+      seniority: seniorityFromTitle(j.title),
       salaryMin: roundOrNull(j.salary?.min),
       salaryMax: roundOrNull(j.salary?.max),
       salaryCurrency: j.salary?.currency ?? null,
@@ -159,18 +156,19 @@ export class JobsService {
     const upserted = await this.prisma.$executeRaw`
       INSERT INTO jobs (
         id, "externalId", source, "companySlug", "companyName", title, department, location, locations,
-        "workplaceType", "employmentType", "salaryMin", "salaryMax", "salaryCurrency", "salaryInterval",
+        "workplaceType", "employmentType", seniority, "salaryMin", "salaryMax", "salaryCurrency", "salaryInterval",
         description, url, "applyUrl", "postedAt", "firstSeenAt", "lastSeenAt", "isActive"
       )
       SELECT
         gen_random_uuid(), r."externalId", r.source, r."companySlug", r."companyName", r.title, r.department,
-        r.location, r.locations, r."workplaceType"::"WorkplaceType", r."employmentType", r."salaryMin",
+        r.location, r.locations, r."workplaceType"::"WorkplaceType", r."employmentType",
+        r.seniority::"Seniority", r."salaryMin",
         r."salaryMax", r."salaryCurrency", r."salaryInterval", r.description, r.url, r."applyUrl",
         r."postedAt", now(), now(), true
       FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(
         "externalId" text, source text, "companySlug" text, "companyName" text, title text,
         department text, location text, locations text[], "workplaceType" text, "employmentType" text,
-        "salaryMin" int, "salaryMax" int, "salaryCurrency" text, "salaryInterval" text,
+        seniority text, "salaryMin" int, "salaryMax" int, "salaryCurrency" text, "salaryInterval" text,
         description text, url text, "applyUrl" text, "postedAt" timestamptz
       )
       ON CONFLICT ("externalId") DO UPDATE SET
@@ -181,6 +179,7 @@ export class JobsService {
         locations = EXCLUDED.locations,
         "workplaceType" = EXCLUDED."workplaceType",
         "employmentType" = EXCLUDED."employmentType",
+        seniority = EXCLUDED.seniority,
         "salaryMin" = EXCLUDED."salaryMin",
         "salaryMax" = EXCLUDED."salaryMax",
         "salaryCurrency" = EXCLUDED."salaryCurrency",
@@ -230,6 +229,15 @@ export class JobsService {
     if (q.location?.trim()) {
       and.push({ location: { contains: q.location.trim(), mode: 'insensitive' } });
     }
+    if (q.seniority?.length) {
+      // Most titles don't state a level ("Product Designer"); those read as mid level.
+      and.push({
+        OR: [
+          { seniority: { in: q.seniority } },
+          ...(q.seniority.includes(Seniority.MID) ? [{ seniority: null }] : []),
+        ],
+      });
+    }
     if (q.workplaceType) and.push({ workplaceType: q.workplaceType });
     if (q.source) and.push({ source: q.source });
     if (q.postedWithinDays) {
@@ -259,7 +267,6 @@ export class JobsService {
     return jobs.map(({ description, ...job }) => ({
       ...job,
       snippet: descriptionSnippet(description),
-      seniority: seniorityFromTitle(job.title),
       match: matchJob(skills, { title: job.title, description }),
       isSaved: savedSet.has(job.id),
       applicationStatus: appliedMap.get(job.id) ?? null,

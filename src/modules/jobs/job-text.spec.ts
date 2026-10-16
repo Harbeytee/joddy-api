@@ -3,11 +3,18 @@ import { descriptionSnippet, seniorityFromTitle } from './job-text';
 describe('seniorityFromTitle', () => {
   it.each([
     ['Software Engineering Intern', 'INTERN'],
-    ['Junior Frontend Developer', 'JUNIOR'],
-    ['Associate Product Manager', 'JUNIOR'],
+    ['Summer Internship 2027', 'INTERN'],
+    ['Graduate Software Engineer', 'GRADUATE'],
+    ['New Grad Data Scientist', 'GRADUATE'],
+    ['Junior Frontend Developer', 'ENTRY'],
+    ['Entry-Level Analyst', 'ENTRY'],
+    ['Associate Product Manager', 'ENTRY'],
     ['Mid-level Backend Engineer', 'MID'],
+    ['Software Engineer II', 'MID'],
     ['Senior Product Designer', 'SENIOR'],
     ['Sr. Data Analyst', 'SENIOR'],
+    ['Software Engineer III', 'SENIOR'],
+    ['Senior Associate, Audit', 'SENIOR'],
     ['Lead Product Designer', 'LEAD'],
     ['Staff Software Engineer', 'STAFF'],
     ['Principal Engineer, Payments', 'PRINCIPAL'],
@@ -24,6 +31,13 @@ describe('seniorityFromTitle', () => {
     expect(seniorityFromTitle('Product Designer')).toBeNull();
     expect(seniorityFromTitle('Staff Accountant')).toBeNull();
     expect(seniorityFromTitle('Leadership Development Coach')).toBeNull();
+    expect(seniorityFromTitle('Postgraduate Researcher')).toBeNull();
+  });
+
+  it('only reads upper-case roman numerals after a word as levels', () => {
+    expect(seniorityFromTitle('Data Engineer IV, Platform')).toBe('SENIOR');
+    expect(seniorityFromTitle('IV Infusion Nurse')).toBeNull();
+    expect(seniorityFromTitle('Infusion Nurse (iv)')).toBeNull();
   });
 });
 

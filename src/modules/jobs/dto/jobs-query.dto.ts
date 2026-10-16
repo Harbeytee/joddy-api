@@ -1,6 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsEnum,
   IsIn,
@@ -11,10 +13,16 @@ import {
   Min,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { WorkplaceType } from '../../../generated/prisma/enums';
+import { Seniority, WorkplaceType } from '../../../generated/prisma/enums';
 
 const toBool = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1';
+
+/** Accepts `?seniority=A&seniority=B` as well as `?seniority=A,B`. */
+const toList = ({ value }: { value: unknown }): unknown[] =>
+  (Array.isArray(value) ? (value as unknown[]) : [value])
+    .flatMap((v) => (typeof v === 'string' ? v.split(',') : [v]))
+    .filter((v) => v !== '');
 
 export const JOB_SORTS = ['newest', 'oldest'] as const;
 export type JobSort = (typeof JOB_SORTS)[number];
@@ -36,6 +44,18 @@ export class JobsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(WorkplaceType)
   workplaceType?: WorkplaceType;
+
+  @ApiPropertyOptional({
+    enum: Seniority,
+    isArray: true,
+    description: 'Any of these levels. MID also matches titles that state no level.',
+  })
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @ArrayMaxSize(Object.keys(Seniority).length)
+  @IsEnum(Seniority, { each: true })
+  seniority?: Seniority[];
 
   @ApiPropertyOptional({ description: 'Only jobs posted within this many days' })
   @IsOptional()

@@ -237,6 +237,18 @@ describe('Joddy API (e2e)', () => {
       expect(res.body.items[0].seniority).toBe('SENIOR');
     });
 
+    it('filters by seniority, treating titles without a level as mid level', async () => {
+      const titles = async (query: string) => {
+        const res = await http.get(`${API}/jobs?${query}`).set('Cookie', auth()).expect(200);
+        return (res.body.items as { title: string }[]).map((j) => j.title).sort();
+      };
+      expect(await titles('seniority=SENIOR')).toEqual(['Senior QA Engineer']);
+      expect(await titles('seniority=MID')).toEqual(['Backend Engineer', 'Frontend Engineer']);
+      expect(await titles('seniority=SENIOR&seniority=MID')).toHaveLength(3);
+      expect(await titles('seniority=SENIOR,INTERN')).toEqual(['Senior QA Engineer']);
+      await http.get(`${API}/jobs?seniority=WIZARD`).set('Cookie', auth()).expect(400);
+    });
+
     it('hides a job from search and saved jobs until it is unhidden', async () => {
       await http.put(`${API}/jobs/${jobId}/save`).set('Cookie', auth()).expect(204);
       await http.put(`${API}/jobs/${jobId}/hide`).set('Cookie', auth()).expect(204);

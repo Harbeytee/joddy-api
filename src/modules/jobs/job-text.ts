@@ -1,36 +1,36 @@
-export const SENIORITIES = [
-  'INTERN',
-  'JUNIOR',
-  'MID',
-  'SENIOR',
-  'LEAD',
-  'STAFF',
-  'PRINCIPAL',
-  'DIRECTOR',
-  'EXECUTIVE',
-] as const;
-export type Seniority = (typeof SENIORITIES)[number];
+import { Seniority } from '../../generated/prisma/enums';
 
-/** Checked in order, so "Senior Director" is a director and "Associate Director" isn't junior. */
-const SENIORITY_RULES: [Seniority, RegExp][] = [
-  ['INTERN', /\b(intern|internship|co-?op|trainee|apprentice(ship)?)\b/i],
-  ['EXECUTIVE', /\b(chief|c[etfo]o|s?vp|evp|vice president)\b/i],
-  ['DIRECTOR', /\b(director|head of)\b/i],
-  ['PRINCIPAL', /\bprincipal\b/i],
-  // "Staff Accountant" or "Staff Nurse" aren't the senior IC "staff" level.
+const STAFF_ROLES =
+  'software|engineer|data|machine|ml|ai|product|designer|scientist|developer|backend|frontend|full[- ]?stack|platform|security|infrastructure|site|research|mobile|ios|android';
+
+/**
+ * Checked in order, so "Senior Director" is a director and "Associate Director" isn't entry level.
+ * Roman numerals must be upper case and follow a word ("Engineer III"), so "IV Nurse" isn't level four.
+ *
+ * Keep in sync with the backfill in the `job_seniority` migration; re-ingesting refreshes every row.
+ */
+const SENIORITY_RULES: [Seniority, RegExp[]][] = [
   [
-    'STAFF',
-    /\bstaff (software|engineer|data|machine|ml|ai|product|designer|scientist|developer|backend|frontend|full[- ]?stack|platform|security|infrastructure|site|research|mobile|ios|android)\b/i,
+    Seniority.INTERN,
+    [/\b(intern|internship|co-?op|trainee|apprentice(ship)?|working student|placement student)\b/i],
   ],
-  ['LEAD', /\b(lead|team lead|tech lead)\b/i],
-  ['SENIOR', /\b(senior|sr)\b/i],
-  ['MID', /\b(mid[- ]?level|intermediate)\b/i],
-  ['JUNIOR', /\b(junior|jr|entry[- ]level|graduate|new grad|associate)\b/i],
+  [Seniority.GRADUATE, [/\b(graduate|new grad|recent grad|early career|university grad)\b/i]],
+  [Seniority.EXECUTIVE, [/\b(chief|c[etfo]o|s?vp|evp|vice president)\b/i]],
+  [Seniority.DIRECTOR, [/\b(director|head of)\b/i]],
+  [Seniority.PRINCIPAL, [/\bprincipal\b/i]],
+  // "Staff Accountant" or "Staff Nurse" aren't the senior IC "staff" level.
+  [Seniority.STAFF, [new RegExp(`\\bstaff (${STAFF_ROLES})\\b`, 'i')]],
+  [Seniority.LEAD, [/\b(lead|team lead|tech lead)\b/i]],
+  [Seniority.SENIOR, [/\b(senior|sr)\b/i, /\s(III|IV)\b/]],
+  [Seniority.MID, [/\b(mid[- ]?level|intermediate)\b/i, /\sII\b/]],
+  [Seniority.ENTRY, [/\b(junior|jr|entry[- ]level|associate)\b/i]],
 ];
 
 /** Best-effort level from the job title; null when the title doesn't say. */
 export function seniorityFromTitle(title: string): Seniority | null {
-  for (const [level, re] of SENIORITY_RULES) if (re.test(title)) return level;
+  for (const [level, patterns] of SENIORITY_RULES) {
+    if (patterns.some((re) => re.test(title))) return level;
+  }
   return null;
 }
 

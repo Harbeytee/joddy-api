@@ -53,6 +53,20 @@ enum WorkplaceType {
   ONSITE
 }
 
+/// Derived from the job title at ingest (see seniorityFromTitle); null when the title doesn't say.
+enum Seniority {
+  INTERN
+  GRADUATE
+  ENTRY
+  MID
+  SENIOR
+  LEAD
+  STAFF
+  PRINCIPAL
+  DIRECTOR
+  EXECUTIVE
+}
+
 model Job {
   id             String         @id @default(uuid()) @db.Uuid
   /// Stable id from the scraper, e.g. "ashby:ramp:<uuid>"
@@ -66,6 +80,7 @@ model Job {
   locations      String[]       @default([])
   workplaceType  WorkplaceType?
   employmentType String?
+  seniority      Seniority?
   salaryMin      Int?
   salaryMax      Int?
   salaryCurrency String?
@@ -84,6 +99,7 @@ model Job {
   agentTasks   AgentTask[]
 
   @@index([isActive, postedAt(sort: Desc)])
+  @@index([isActive, seniority, postedAt(sort: Desc)])
   @@index([companySlug])
   /// Trigram indexes make case-insensitive "contains" search fast (needs the pg_trgm extension).
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "jobs_title_trgm_idx")
