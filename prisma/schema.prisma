@@ -23,6 +23,7 @@ model User {
   applications  Application[]
   resumes       Resume[]
   savedJobs     SavedJob[]
+  hiddenJobs    HiddenJob[]
   agentSettings AgentSettings?
   agentTasks    AgentTask[]
 
@@ -78,6 +79,7 @@ model Job {
   isActive       Boolean        @default(true)
 
   savedBy      SavedJob[]
+  hiddenBy     HiddenJob[]
   applications Application[]
   agentTasks   AgentTask[]
 
@@ -100,6 +102,19 @@ model SavedJob {
 
   @@id([userId, jobId])
   @@map("saved_jobs")
+}
+
+/// Jobs the user dismissed ("not interested"); excluded from their search, recommendations and agent.
+model HiddenJob {
+  userId    String   @db.Uuid
+  jobId     String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([userId, jobId])
+  @@map("hidden_jobs")
 }
 
 enum ApplicationStatus {

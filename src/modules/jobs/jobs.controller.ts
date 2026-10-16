@@ -54,6 +54,18 @@ export class JobsController {
     return this.jobs.unsave(user.id, id);
   }
 
+  @Put(':id/hide')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  hide(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.jobs.hide(user.id, id);
+  }
+
+  @Delete(':id/hide')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  unhide(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.jobs.unhide(user.id, id);
+  }
+
   @Public()
   @SkipThrottle()
   @UseGuards(IngestKeyGuard)

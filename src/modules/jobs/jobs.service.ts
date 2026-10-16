@@ -4,6 +4,7 @@ import { Prisma, type Job } from '../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DeactivateStaleDto, IngestJobDto } from './dto/ingest.dto';
 import type { JobsQueryDto } from './dto/jobs-query.dto';
+import { descriptionSnippet, seniorityFromTitle } from './job-text';
 import { matchJob } from './matching';
 
 const LIST_SELECT = {
@@ -25,7 +26,7 @@ const LIST_SELECT = {
   applyUrl: true,
   postedAt: true,
   firstSeenAt: true,
-  // Needed for match scoring; stripped before the list is returned.
+  // Needed for match scoring and the snippet; stripped before the list is returned.
   description: true,
 } satisfies Prisma.JobSelect;
 
@@ -36,12 +37,15 @@ export class JobsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(userId: string, q: JobsQueryDto) {
-    const where = this.buildWhere(q);
+    const where = this.buildWhere(userId, q);
     const [rows, total, skills] = await Promise.all([
       this.prisma.job.findMany({
         where,
         select: LIST_SELECT,
-        orderBy: [{ postedAt: { sort: 'desc', nulls: 'last' } }, { id: 'asc' }],
+        orderBy: [
+          { postedAt: { sort: q.sort === 'oldest' ? 'asc' : 'desc', nulls: 'last' } },
+          { id: 'asc' },
+        ],
         skip: q.skip,
         take: q.pageSize,
       }),
@@ -87,7 +91,13 @@ export class JobsService {
         select: { id: true, status: true, appliedAt: true },
       }),
     ]);
-    return { ...job, match: matchJob(skills, job), isSaved: !!saved, application };
+    return {
+      ...job,
+      seniority: seniorityFromTitle(job.title),
+      match: matchJob(skills, job),
+      isSaved: !!saved,
+      application,
+    };
   }
 
   async save(userId: string, jobId: string): Promise<void> {
@@ -101,6 +111,23 @@ export class JobsService {
 
   async unsave(userId: string, jobId: string): Promise<void> {
     await this.prisma.savedJob.deleteMany({ where: { userId, jobId } });
+  }
+
+  /** "Not interested": also drops it from saved jobs so it disappears everywhere. */
+  async hide(userId: string, jobId: string): Promise<void> {
+    await this.ensureExists(jobId);
+    await this.prisma.$transaction([
+      this.prisma.hiddenJob.upsert({
+        where: { userId_jobId: { userId, jobId } },
+        create: { userId, jobId },
+        update: {},
+      }),
+      this.prisma.savedJob.deleteMany({ where: { userId, jobId } }),
+    ]);
+  }
+
+  async unhide(userId: string, jobId: string): Promise<void> {
+    await this.prisma.hiddenJob.deleteMany({ where: { userId, jobId } });
   }
 
   /**
@@ -188,8 +215,8 @@ export class JobsService {
     return user?.skills ?? [];
   }
 
-  private buildWhere(q: JobsQueryDto): Prisma.JobWhereInput {
-    const and: Prisma.JobWhereInput[] = [{ isActive: true }];
+  private buildWhere(userId: string, q: JobsQueryDto): Prisma.JobWhereInput {
+    const and: Prisma.JobWhereInput[] = [{ isActive: true }, { hiddenBy: { none: { userId } } }];
 
     const terms = q.q?.trim().split(/\s+/).filter(Boolean).slice(0, 8) ?? [];
     for (const term of terms) {
@@ -231,6 +258,8 @@ export class JobsService {
 
     return jobs.map(({ description, ...job }) => ({
       ...job,
+      snippet: descriptionSnippet(description),
+      seniority: seniorityFromTitle(job.title),
       match: matchJob(skills, { title: job.title, description }),
       isSaved: savedSet.has(job.id),
       applicationStatus: appliedMap.get(job.id) ?? null,

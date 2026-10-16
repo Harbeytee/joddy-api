@@ -1,11 +1,23 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { WorkplaceType } from '../../../generated/prisma/enums';
 
 const toBool = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1';
+
+export const JOB_SORTS = ['newest', 'oldest'] as const;
+export type JobSort = (typeof JOB_SORTS)[number];
 
 export class JobsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'Keywords matched against title and company' })
@@ -50,4 +62,9 @@ export class JobsQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(30)
   source?: string;
+
+  @ApiPropertyOptional({ enum: JOB_SORTS, default: 'newest', description: 'By posting date' })
+  @IsOptional()
+  @IsIn(JOB_SORTS)
+  sort?: JobSort;
 }

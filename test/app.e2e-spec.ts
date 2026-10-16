@@ -206,7 +206,54 @@ describe('Joddy API (e2e)', () => {
       const [job] = res.body.items;
       expect(job.match).toEqual({ score: 100, matched: ['TypeScript', 'Vue'], missing: [] });
       expect(job.salaryMax).toBe(75001);
+      expect(job.snippet).toBe('We build with TypeScript and Vue.');
+      expect(job.seniority).toBeNull();
       jobId = job.id;
+    });
+
+    it('sorts by posting date', async () => {
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({
+          jobs: [
+            sampleJob('old', { title: 'Senior QA Engineer', postedAt: '2020-01-01T00:00:00Z' }),
+          ],
+        })
+        .expect(200);
+      const titles = async (sort?: string) => {
+        const res = await http.get(`${API}/jobs`).query({ sort }).set('Cookie', auth()).expect(200);
+        return (res.body.items as { title: string }[]).map((j) => j.title);
+      };
+      expect((await titles()).at(-1)).toBe('Senior QA Engineer');
+      expect((await titles('oldest'))[0]).toBe('Senior QA Engineer');
+      await http.get(`${API}/jobs`).query({ sort: 'salary' }).set('Cookie', auth()).expect(400);
+
+      const res = await http
+        .get(`${API}/jobs`)
+        .query({ q: 'QA' })
+        .set('Cookie', auth())
+        .expect(200);
+      expect(res.body.items[0].seniority).toBe('SENIOR');
+    });
+
+    it('hides a job from search and saved jobs until it is unhidden', async () => {
+      await http.put(`${API}/jobs/${jobId}/save`).set('Cookie', auth()).expect(204);
+      await http.put(`${API}/jobs/${jobId}/hide`).set('Cookie', auth()).expect(204);
+
+      const ids = async (path: string) => {
+        const res = await http.get(`${API}${path}`).set('Cookie', auth()).expect(200);
+        return (res.body.items as { id: string }[]).map((j) => j.id);
+      };
+      expect(await ids('/jobs')).not.toContain(jobId);
+      expect(await ids('/jobs/saved')).not.toContain(jobId);
+
+      await http.delete(`${API}/jobs/${jobId}/hide`).set('Cookie', auth()).expect(204);
+      expect(await ids('/jobs')).toContain(jobId);
+      await http
+        .put(`${API}/jobs/00000000-0000-4000-8000-000000000000/hide`)
+        .set('Cookie', auth())
+        .expect(404);
     });
 
     it('saves and unsaves a job', async () => {

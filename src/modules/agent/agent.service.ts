@@ -207,6 +207,7 @@ export class AgentService {
       { OR: s.keywords.map((k) => ({ title: { contains: k, mode: 'insensitive' as const } })) },
       { agentTasks: { none: { userId } } },
       { applications: { none: { userId } } },
+      { hiddenBy: { none: { userId } } },
     ];
     for (const ex of s.excludedKeywords) {
       and.push({ NOT: { title: { contains: ex, mode: 'insensitive' } } });

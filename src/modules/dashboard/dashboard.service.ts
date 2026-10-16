@@ -78,6 +78,7 @@ export class DashboardService {
         isActive: true,
         applications: { none: { userId } },
         savedBy: { none: { userId } },
+        hiddenBy: { none: { userId } },
       },
       orderBy: { postedAt: { sort: 'desc', nulls: 'last' } },
       take: RECOMMENDATION_POOL,
