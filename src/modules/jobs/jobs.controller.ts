@@ -37,9 +37,9 @@ export class JobsController {
     return this.jobs.listSaved(user.id, q);
   }
 
-  @Get('remote-areas')
-  remoteAreas() {
-    return this.jobs.remoteAreas();
+  @Get('locations')
+  locations() {
+    return this.jobs.locations();
   }
 
   @Get(':id')

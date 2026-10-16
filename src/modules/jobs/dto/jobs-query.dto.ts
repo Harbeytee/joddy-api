@@ -25,6 +25,8 @@ const toList = ({ value }: { value: unknown }): unknown[] =>
     .flatMap((v) => (typeof v === 'string' ? v.split(',') : [v]))
     .filter((v) => v !== '');
 
+const MAX_PLACES = 50;
+
 export const JOB_SORTS = ['newest', 'oldest'] as const;
 export type JobSort = (typeof JOB_SORTS)[number];
 
@@ -41,10 +43,41 @@ export class JobsQueryDto extends PaginationQueryDto {
   @MaxLength(100)
   location?: string;
 
-  @ApiPropertyOptional({ enum: WorkplaceType })
+  @ApiPropertyOptional({ enum: WorkplaceType, isArray: true, description: 'Any of these' })
   @IsOptional()
-  @IsEnum(WorkplaceType)
-  workplaceType?: WorkplaceType;
+  @Transform(toList)
+  @IsArray()
+  @ArrayMaxSize(Object.keys(WorkplaceType).length)
+  @IsEnum(WorkplaceType, { each: true })
+  workplaceType?: WorkplaceType[];
+
+  @ApiPropertyOptional({
+    isArray: true,
+    example: ['NG', 'GB'],
+    description:
+      'ISO 3166-1 alpha-2 codes. Matches jobs in any of these countries, or open to a region containing one.',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    toList({ value }).map((v) => (typeof v === 'string' ? v.toUpperCase() : v)),
+  )
+  @IsArray()
+  @ArrayMaxSize(MAX_PLACES)
+  @IsIn([...COUNTRY_CODES], { each: true })
+  country?: string[];
+
+  @ApiPropertyOptional({
+    enum: Region,
+    isArray: true,
+    description:
+      'Matches jobs in these regions or open to them. WORLDWIDE means jobs open to anyone.',
+  })
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @ArrayMaxSize(Object.keys(Region).length)
+  @IsEnum(Region, { each: true })
+  region?: Region[];
 
   @ApiPropertyOptional({
     enum: Seniority,
@@ -65,22 +98,6 @@ export class JobsQueryDto extends PaginationQueryDto {
   @ArrayMaxSize(Object.keys(JobType).length)
   @IsEnum(JobType, { each: true })
   jobType?: JobType[];
-
-  @ApiPropertyOptional({ enum: Region, description: 'Remote jobs advertised for this region' })
-  @IsOptional()
-  @IsEnum(Region)
-  remoteRegion?: Region;
-
-  @ApiPropertyOptional({
-    example: 'GB',
-    description: 'Remote jobs open in this country (ISO 3166-1 alpha-2)',
-  })
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.toUpperCase() : value,
-  )
-  @IsIn([...COUNTRY_CODES])
-  remoteCountry?: string;
 
   @ApiPropertyOptional({ description: 'Only jobs posted within this many days' })
   @IsOptional()

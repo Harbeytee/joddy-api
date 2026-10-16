@@ -1,11 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { paginate, PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { Prisma, type Job } from '../../generated/prisma/client';
-import { Region, Seniority, WorkplaceType } from '../../generated/prisma/enums';
+import { Seniority, WorkplaceType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DeactivateStaleDto, IngestJobDto } from './dto/ingest.dto';
 import type { JobsQueryDto } from './dto/jobs-query.dto';
+import { COUNTRY_CODES } from './geo/countries';
 import { locationScope, looksRemote } from './geo/location-scope';
+import { locationMatch, REGION_ORDER } from './geo/regions';
 import { descriptionSnippet, jobTypeFromText, seniorityFromTitle } from './job-text';
 import { matchJob } from './matching';
 
@@ -38,49 +40,15 @@ const LIST_SELECT = {
 
 type ListedJob = Prisma.JobGetPayload<{ select: typeof LIST_SELECT }>;
 
-const REMOTE_AREAS_TTL_MS = 10 * 60_000;
-
-export interface RemoteAreas {
-  regions: { region: Region; count: number }[];
-  countries: { code: string; count: number }[];
-}
+/** Everything the location filter accepts, so the UI and validation can't drift apart. */
+const LOCATIONS = { regions: REGION_ORDER, countries: [...COUNTRY_CODES].sort() };
 
 @Injectable()
 export class JobsService {
-  private remoteAreasCache: { expiresAt: number; value: Promise<RemoteAreas> } | null = null;
-
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Regions and countries that currently have remote jobs, for the filter UI. Cached briefly. */
-  remoteAreas(): Promise<RemoteAreas> {
-    if (this.remoteAreasCache && this.remoteAreasCache.expiresAt > Date.now()) {
-      return this.remoteAreasCache.value;
-    }
-    const value = this.loadRemoteAreas();
-    this.remoteAreasCache = { expiresAt: Date.now() + REMOTE_AREAS_TTL_MS, value };
-    value.catch(() => (this.remoteAreasCache = null));
-    return value;
-  }
-
-  private async loadRemoteAreas(): Promise<RemoteAreas> {
-    const [regions, countries] = await Promise.all([
-      this.prisma.$queryRaw<{ region: Region; count: bigint }[]>`
-        SELECT r AS region, count(*) AS count
-        FROM jobs, unnest(regions) AS r
-        WHERE "isActive" AND "workplaceType" = 'REMOTE'
-        GROUP BY r ORDER BY count DESC
-      `,
-      this.prisma.$queryRaw<{ code: string; count: bigint }[]>`
-        SELECT c AS code, count(*) AS count
-        FROM jobs, unnest(countries) AS c
-        WHERE "isActive" AND "workplaceType" = 'REMOTE'
-        GROUP BY c ORDER BY count DESC
-      `,
-    ]);
-    return {
-      regions: regions.map((r) => ({ region: r.region, count: Number(r.count) })),
-      countries: countries.map((c) => ({ code: c.code, count: Number(c.count) })),
-    };
+  locations() {
+    return LOCATIONS;
   }
 
   async list(userId: string, q: JobsQueryDto) {
@@ -298,14 +266,16 @@ export class JobsService {
         ],
       });
     }
-    if (q.workplaceType) and.push({ workplaceType: q.workplaceType });
+    if (q.workplaceType?.length) and.push({ workplaceType: { in: q.workplaceType } });
     if (q.jobType?.length) and.push({ jobType: { in: q.jobType } });
-    // Remote areas are categories: "EMEA" means jobs advertised as remote across EMEA.
-    if (q.remoteRegion) {
-      and.push({ workplaceType: WorkplaceType.REMOTE, regions: { has: q.remoteRegion } });
-    }
-    if (q.remoteCountry) {
-      and.push({ workplaceType: WorkplaceType.REMOTE, countries: { has: q.remoteCountry } });
+    if (q.country?.length || q.region?.length) {
+      const match = locationMatch(q.country ?? [], q.region ?? []);
+      and.push({
+        OR: [
+          ...(match.countries.length ? [{ countries: { hasSome: match.countries } }] : []),
+          { regions: { hasSome: match.regions } },
+        ],
+      });
     }
     if (q.source) and.push({ source: q.source });
     if (q.postedWithinDays) {

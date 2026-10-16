@@ -302,7 +302,7 @@ describe('Joddy API (e2e)', () => {
       expect(job.body.application).toMatchObject({ status: 'APPLIED' });
     });
 
-    it('filters by job type and remote area', async () => {
+    it('filters by workplace, job type and location', async () => {
       const remote = (id: string, overrides: Record<string, unknown>) =>
         sampleJob(id, { workplaceType: 'remote', description: '', locations: [], ...overrides });
       await http
@@ -327,6 +327,13 @@ describe('Joddy API (e2e)', () => {
               workplaceType: undefined,
               employmentType: 'parttime permanent',
             }),
+            sampleJob('lagos', {
+              title: 'Field Engineer',
+              location: 'Lagos, Nigeria',
+              locations: [],
+              workplaceType: 'onsite',
+              description: '',
+            }),
           ],
         })
         .expect(200);
@@ -335,31 +342,48 @@ describe('Joddy API (e2e)', () => {
         const res = await http.get(`${API}/jobs?${query}`).set('Cookie', auth()).expect(200);
         return (res.body.items as { title: string }[]).map((j) => j.title).sort();
       };
-      expect(await titles('remoteRegion=EMEA')).toEqual(['Account Manager']);
-      expect(await titles('remoteRegion=WORLDWIDE')).toEqual(['Community Lead']);
-      expect(await titles('remoteCountry=us')).toEqual(['Support Specialist']);
-      expect(await titles('jobType=CONTRACT,PART_TIME')).toEqual([
+      // A country also matches remote jobs open to a region containing it, and worldwide ones.
+      expect(await titles('country=ng')).toEqual([
+        'Account Manager',
+        'Community Lead',
+        'Field Engineer',
+      ]);
+      expect(await titles('country=US')).toEqual(['Community Lead', 'Support Specialist']);
+      expect(await titles('country=US,NG&workplaceType=ONSITE')).toEqual(['Field Engineer']);
+      expect(await titles('region=AFRICA&workplaceType=REMOTE')).toEqual([
+        'Account Manager',
+        'Community Lead',
+      ]);
+      expect(await titles('region=WORLDWIDE')).toEqual(['Community Lead']);
+      expect(await titles('workplaceType=REMOTE,ONSITE&jobType=CONTRACT,PART_TIME')).toEqual([
         'Community Lead',
         'Support Specialist',
       ]);
-      await http.get(`${API}/jobs?remoteCountry=XX`).set('Cookie', auth()).expect(400);
-      await http.get(`${API}/jobs?jobType=GIG`).set('Cookie', auth()).expect(400);
+      for (const bad of ['country=XX', 'region=MARS', 'jobType=GIG', 'workplaceType=SPACE']) {
+        await http.get(`${API}/jobs?${bad}`).set('Cookie', auth()).expect(400);
+      }
 
-      const list = await http.get(`${API}/jobs?remoteRegion=EMEA`).set('Cookie', auth());
+      const list = await http.get(`${API}/jobs?q=account+manager`).set('Cookie', auth());
       expect(list.body.items[0]).toMatchObject({
         jobType: 'FULL_TIME',
         regions: ['EMEA'],
         countries: [],
       });
 
-      const areas = await http.get(`${API}/jobs/remote-areas`).set('Cookie', auth()).expect(200);
-      expect(areas.body.regions).toEqual(
-        expect.arrayContaining([
-          { region: 'EMEA', count: 1 },
-          { region: 'WORLDWIDE', count: 1 },
-        ]),
-      );
-      expect(areas.body.countries).toEqual([{ code: 'US', count: 1 }]);
+      const locations = await http.get(`${API}/jobs/locations`).set('Cookie', auth()).expect(200);
+      expect(locations.body.regions[0]).toBe('WORLDWIDE');
+      expect(locations.body.countries).toEqual(expect.arrayContaining(['NG', 'GB', 'US']));
+    });
+
+    it("derives the profile's country for the default location filter", async () => {
+      const res = await http
+        .patch(`${API}/users/me`)
+        .set('Cookie', auth())
+        .send({ location: 'Lagos, Nigeria' })
+        .expect(200);
+      expect(res.body.countryCode).toBe('NG');
+      const me = await http.get(`${API}/auth/me`).set('Cookie', auth()).expect(200);
+      expect(me.body.countryCode).toBe('NG');
     });
   });
 
