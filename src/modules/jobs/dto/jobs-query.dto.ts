@@ -113,6 +113,13 @@ export class JobsQueryDto extends PaginationQueryDto {
   @Min(0)
   salaryMin?: number;
 
+  @ApiPropertyOptional({ description: 'Maximum yearly salary (jobs without salary are excluded)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  salaryMax?: number;
+
   @ApiPropertyOptional({ description: 'Only jobs that list a salary' })
   @IsOptional()
   @Transform(toBool)

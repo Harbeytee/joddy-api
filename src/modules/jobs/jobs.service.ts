@@ -51,6 +51,49 @@ export class JobsService {
     return LOCATIONS;
   }
 
+  /**
+   * How many jobs each filter option would return. Each group ignores its own filter
+   * (so ticking "Part-time" doesn't zero out "Full-time") but applies all the others.
+   */
+  async facets(userId: string, q: JobsQueryDto) {
+    const without = (key: 'workplaceType' | 'jobType' | 'seniority') =>
+      this.buildWhere(userId, { ...q, [key]: undefined });
+    const [total, workplace, jobType, seniority] = await Promise.all([
+      this.prisma.job.count({ where: this.buildWhere(userId, q) }),
+      this.prisma.job.groupBy({
+        by: ['workplaceType'],
+        where: without('workplaceType'),
+        _count: { _all: true },
+      }),
+      this.prisma.job.groupBy({
+        by: ['jobType'],
+        where: without('jobType'),
+        _count: { _all: true },
+      }),
+      this.prisma.job.groupBy({
+        by: ['seniority'],
+        where: without('seniority'),
+        _count: { _all: true },
+      }),
+    ]);
+
+    const counts = <K extends string>(rows: { key: K | null; n: number }[]) =>
+      Object.fromEntries(rows.filter((r) => r.key).map((r) => [r.key, r.n])) as Partial<
+        Record<K, number>
+      >;
+    const seniorityCounts = counts(seniority.map((r) => ({ key: r.seniority, n: r._count._all })));
+    // Matches the filter: MID includes titles that state no level.
+    const unstated = seniority.find((r) => r.seniority === null)?._count._all ?? 0;
+    seniorityCounts.MID = (seniorityCounts.MID ?? 0) + unstated;
+
+    return {
+      total,
+      workplaceType: counts(workplace.map((r) => ({ key: r.workplaceType, n: r._count._all }))),
+      jobType: counts(jobType.map((r) => ({ key: r.jobType, n: r._count._all }))),
+      seniority: seniorityCounts,
+    };
+  }
+
   async list(userId: string, q: JobsQueryDto) {
     const where = this.buildWhere(userId, q);
     const [rows, total, skills] = await Promise.all([
@@ -242,7 +285,7 @@ export class JobsService {
     return user?.skills ?? [];
   }
 
-  private buildWhere(userId: string, q: JobsQueryDto): Prisma.JobWhereInput {
+  private buildWhere(userId: string, q: Omit<JobsQueryDto, 'skip'>): Prisma.JobWhereInput {
     const and: Prisma.JobWhereInput[] = [{ isActive: true }, { hiddenBy: { none: { userId } } }];
 
     const terms = q.q?.trim().split(/\s+/).filter(Boolean).slice(0, 8) ?? [];
@@ -282,7 +325,17 @@ export class JobsService {
       and.push({ postedAt: { gte: new Date(Date.now() - q.postedWithinDays * 86_400_000) } });
     }
     if (q.hasSalary) and.push({ salaryMax: { not: null } });
+    // A range matches when it overlaps the job's own range.
     if (q.salaryMin) and.push({ salaryInterval: 'year', salaryMax: { gte: q.salaryMin } });
+    if (q.salaryMax) {
+      and.push({
+        salaryInterval: 'year',
+        OR: [
+          { salaryMin: { lte: q.salaryMax } },
+          { salaryMin: null, salaryMax: { lte: q.salaryMax } },
+        ],
+      });
+    }
 
     return { AND: and };
   }

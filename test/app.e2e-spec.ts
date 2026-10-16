@@ -359,6 +359,25 @@ describe('Joddy API (e2e)', () => {
         'Community Lead',
         'Support Specialist',
       ]);
+      // All of these list £60K–£75K a year.
+      expect(await titles('country=NG&salaryMin=70000&salaryMax=80000')).toHaveLength(3);
+      expect(await titles('country=NG&salaryMax=50000')).toEqual([]);
+      expect(await titles('country=NG&salaryMin=80000')).toEqual([]);
+
+      const facets = await http
+        .get(`${API}/jobs/facets?country=NG&workplaceType=ONSITE`)
+        .set('Cookie', auth())
+        .expect(200);
+      expect(facets.body.total).toBe(1);
+      // The workplace counts ignore the workplace filter itself.
+      expect(facets.body.workplaceType).toEqual({ REMOTE: 2, ONSITE: 1 });
+      const byType = await http
+        .get(`${API}/jobs/facets?country=NG&jobType=FULL_TIME`)
+        .set('Cookie', auth())
+        .expect(200);
+      expect(byType.body.total).toBe(1);
+      expect(byType.body.jobType).toEqual({ FULL_TIME: 1, PART_TIME: 1 });
+
       for (const bad of ['country=XX', 'region=MARS', 'jobType=GIG', 'workplaceType=SPACE']) {
         await http.get(`${API}/jobs?${bad}`).set('Cookie', auth()).expect(400);
       }

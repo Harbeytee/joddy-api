@@ -42,6 +42,11 @@ export class JobsController {
     return this.jobs.locations();
   }
 
+  @Get('facets')
+  facets(@CurrentUser() user: AuthUser, @Query() q: JobsQueryDto) {
+    return this.jobs.facets(user.id, q);
+  }
+
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.jobs.get(user.id, id);
