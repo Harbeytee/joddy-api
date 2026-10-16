@@ -1,0 +1,52 @@
+# Local production-like stack: Postgres + migrations + API.
+#   docker compose up --build
+# Secrets below are for local use only; set real ones via env/secret manager in deployed environments.
+name: joddy
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: joddy
+      POSTGRES_PASSWORD: joddy
+      POSTGRES_DB: joddy
+    ports:
+      - '5433:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U joddy -d joddy']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://joddy:joddy@db:5432/joddy
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      target: runtime
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://joddy:joddy@db:5432/joddy
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-local-compose-access-secret-change-me-0000}
+      INGEST_API_KEY: ${INGEST_API_KEY:-local-compose-ingest-key-change-me}
+      LOG_LEVEL: info
+    ports:
+      - '4000:4000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:

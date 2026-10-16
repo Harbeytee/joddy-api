@@ -1,0 +1,221 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  name         String
+  headline     String?
+  location     String?
+  skills       String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions      Session[]
+  applications  Application[]
+  resumes       Resume[]
+  savedJobs     SavedJob[]
+  agentSettings AgentSettings?
+  agentTasks    AgentTask[]
+
+  @@map("users")
+}
+
+/// One row per refresh token; rotated on every refresh and revoked on logout.
+model Session {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+enum WorkplaceType {
+  REMOTE
+  HYBRID
+  ONSITE
+}
+
+model Job {
+  id             String         @id @default(uuid()) @db.Uuid
+  /// Stable id from the scraper, e.g. "ashby:ramp:<uuid>"
+  externalId     String         @unique
+  source         String
+  companySlug    String
+  companyName    String
+  title          String
+  department     String?
+  location       String?
+  locations      String[]       @default([])
+  workplaceType  WorkplaceType?
+  employmentType String?
+  salaryMin      Int?
+  salaryMax      Int?
+  salaryCurrency String?
+  salaryInterval String?
+  description    String         @default("")
+  url            String
+  applyUrl       String
+  postedAt       DateTime?
+  firstSeenAt    DateTime       @default(now())
+  lastSeenAt     DateTime       @default(now())
+  isActive       Boolean        @default(true)
+
+  savedBy      SavedJob[]
+  applications Application[]
+  agentTasks   AgentTask[]
+
+  @@index([isActive, postedAt(sort: Desc)])
+  @@index([companySlug])
+  /// Trigram indexes make case-insensitive "contains" search fast (needs the pg_trgm extension).
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "jobs_title_trgm_idx")
+  @@index([companyName(ops: raw("gin_trgm_ops"))], type: Gin, map: "jobs_company_name_trgm_idx")
+  @@index([location(ops: raw("gin_trgm_ops"))], type: Gin, map: "jobs_location_trgm_idx")
+  @@map("jobs")
+}
+
+model SavedJob {
+  userId    String   @db.Uuid
+  jobId     String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([userId, jobId])
+  @@map("saved_jobs")
+}
+
+enum ApplicationStatus {
+  APPLIED
+  INTERVIEW
+  OFFER
+  REJECTED
+  GHOSTED
+}
+
+enum JobType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+}
+
+enum AppliedVia {
+  MANUAL
+  AGENT
+}
+
+model Application {
+  id         String            @id @default(uuid()) @db.Uuid
+  userId     String            @db.Uuid
+  jobId      String?           @db.Uuid
+  resumeId   String?           @db.Uuid
+  role       String
+  company    String
+  status     ApplicationStatus @default(APPLIED)
+  jobType    JobType?
+  location   String?
+  source     String?
+  url        String?
+  notes      String?
+  appliedVia AppliedVia        @default(MANUAL)
+  appliedAt  DateTime          @default(now())
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job    Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  resume Resume? @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([userId, appliedAt(sort: Desc)])
+  @@map("applications")
+}
+
+model Resume {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  title     String
+  isDefault Boolean  @default(false)
+  template  String   @default("classic")
+  /// { personal, summary, experience[], education[], skills[] }; validated by the API DTOs
+  content   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applications  Application[]
+  agentSettings AgentSettings[]
+
+  @@index([userId])
+  @@map("resumes")
+}
+
+enum AgentMode {
+  REVIEW
+  AUTO
+}
+
+model AgentSettings {
+  userId           String    @id @db.Uuid
+  enabled          Boolean   @default(false)
+  mode             AgentMode @default(REVIEW)
+  dailyLimit       Int       @default(10)
+  minMatchScore    Int       @default(60)
+  keywords         String[]  @default([])
+  excludedKeywords String[]  @default([])
+  locations        String[]  @default([])
+  remoteOnly       Boolean   @default(false)
+  resumeId         String?   @db.Uuid
+  updatedAt        DateTime  @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resume Resume? @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+
+  @@map("agent_settings")
+}
+
+enum AgentTaskStatus {
+  NEEDS_REVIEW
+  QUEUED
+  SUBMITTED
+  FAILED
+  SKIPPED
+}
+
+model AgentTask {
+  id          String          @id @default(uuid()) @db.Uuid
+  userId      String          @db.Uuid
+  jobId       String          @db.Uuid
+  status      AgentTaskStatus
+  matchScore  Int
+  matched     String[]        @default([])
+  error       String?
+  submittedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId, status])
+  @@map("agent_tasks")
+}
