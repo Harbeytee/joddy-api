@@ -89,9 +89,11 @@ export class AgentService {
    */
   async run(userId: string) {
     const settings = await this.getSettings(userId);
-    if (!settings.enabled) throw new BadRequestException('Turn the agent on before running it');
+    if (!settings.enabled) throw new BadRequestException('Turn on auto-apply first');
     if (!settings.keywords.length) {
-      throw new BadRequestException('Add at least one job title keyword for the agent to search');
+      throw new BadRequestException(
+        'Add the job titles you want in Job preferences so Joddy knows what to look for',
+      );
     }
 
     const remaining = settings.dailyLimit - (await this.createdToday(userId));
@@ -100,7 +102,7 @@ export class AgentService {
     const skills = await this.skillsFor(userId, settings.resumeId);
     if (!skills.length) {
       throw new BadRequestException(
-        'Add skills to your profile or resume so the agent can score jobs',
+        'Add your skills in Settings so Joddy can find jobs that fit you',
       );
     }
 
