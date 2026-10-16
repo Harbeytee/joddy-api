@@ -63,7 +63,8 @@ describe('Joddy API (e2e)', () => {
   describe('auth', () => {
     it('rejects unauthenticated requests', async () => {
       await http.get(`${API}/auth/me`).expect(401);
-      await http.get(`${API}/jobs`).expect(401);
+      await http.get(`${API}/applications`).expect(401);
+      await http.get(`${API}/agent/summary`).expect(401);
     });
 
     it('validates registration input', async () => {
@@ -300,6 +301,35 @@ describe('Joddy API (e2e)', () => {
 
       const job = await http.get(`${API}/jobs/${jobId}`).set('Cookie', auth()).expect(200);
       expect(job.body.application).toMatchObject({ status: 'APPLIED' });
+    });
+
+    it('lets guests browse jobs without anyone else’s personal data', async () => {
+      await http.put(`${API}/jobs/${jobId}/save`).set('Cookie', auth()).expect(204);
+      await http.put(`${API}/jobs/${jobId}/hide`).set('Cookie', auth()).expect(204);
+
+      const list = await http.get(`${API}/jobs`).expect(200);
+      const listed = (list.body.items as { id: string }[]).find((j) => j.id === jobId);
+      expect(listed).toMatchObject({ match: null, isSaved: false, applicationStatus: null });
+
+      const detail = await http.get(`${API}/jobs/${jobId}`).expect(200);
+      expect(detail.body).toMatchObject({ match: null, isSaved: false, application: null });
+
+      const facets = await http.get(`${API}/jobs/facets`).expect(200);
+      expect(facets.body.total).toBe(list.body.total);
+      await http.get(`${API}/jobs/locations`).expect(200);
+
+      await http.get(`${API}/jobs/saved`).expect(401);
+      await http.put(`${API}/jobs/${jobId}/save`).expect(401);
+      await http.put(`${API}/jobs/${jobId}/hide`).expect(401);
+      await http.post(`${API}/applications`).send({ jobId }).expect(401);
+
+      await http.delete(`${API}/jobs/${jobId}/hide`).set('Cookie', auth()).expect(204);
+      await http.delete(`${API}/jobs/${jobId}/save`).set('Cookie', auth()).expect(204);
+    });
+
+    it('rejects a bad token on guest-friendly routes so the client refreshes', async () => {
+      await http.get(`${API}/jobs`).set('Cookie', 'joddy_at=not-a-real-token').expect(401);
+      await http.get(`${API}/jobs/${jobId}`).set('Cookie', 'joddy_at=not-a-real-token').expect(401);
     });
 
     it('filters by workplace, job type and location', async () => {

@@ -55,7 +55,7 @@ export class JobsService {
    * How many jobs each filter option would return. Each group ignores its own filter
    * (so ticking "Part-time" doesn't zero out "Full-time") but applies all the others.
    */
-  async facets(userId: string, q: JobsQueryDto) {
+  async facets(userId: string | undefined, q: JobsQueryDto) {
     const without = (key: 'workplaceType' | 'jobType' | 'seniority') =>
       this.buildWhere(userId, { ...q, [key]: undefined });
     const [total, workplace, jobType, seniority] = await Promise.all([
@@ -94,7 +94,8 @@ export class JobsService {
     };
   }
 
-  async list(userId: string, q: JobsQueryDto) {
+  /** `userId` is undefined for guests: no hidden jobs, saved state or match scores. */
+  async list(userId: string | undefined, q: JobsQueryDto) {
     const where = this.buildWhere(userId, q);
     const [rows, total, skills] = await Promise.all([
       this.prisma.job.findMany({
@@ -137,9 +138,10 @@ export class JobsService {
     );
   }
 
-  async get(userId: string, id: string) {
+  async get(userId: string | undefined, id: string) {
     const job = await this.prisma.job.findUnique({ where: { id } });
     if (!job) throw new NotFoundException('Job not found');
+    if (!userId) return { ...job, match: null, isSaved: false, application: null };
 
     const [skills, saved, application] = await Promise.all([
       this.userSkills(userId),
@@ -277,7 +279,8 @@ export class JobsService {
     return { deactivated: count };
   }
 
-  async userSkills(userId: string): Promise<string[]> {
+  async userSkills(userId: string | undefined): Promise<string[]> {
+    if (!userId) return [];
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { skills: true },
@@ -285,8 +288,12 @@ export class JobsService {
     return user?.skills ?? [];
   }
 
-  private buildWhere(userId: string, q: Omit<JobsQueryDto, 'skip'>): Prisma.JobWhereInput {
-    const and: Prisma.JobWhereInput[] = [{ isActive: true }, { hiddenBy: { none: { userId } } }];
+  private buildWhere(
+    userId: string | undefined,
+    q: Omit<JobsQueryDto, 'skip'>,
+  ): Prisma.JobWhereInput {
+    const and: Prisma.JobWhereInput[] = [{ isActive: true }];
+    if (userId) and.push({ hiddenBy: { none: { userId } } });
 
     const terms = q.q?.trim().split(/\s+/).filter(Boolean).slice(0, 8) ?? [];
     for (const term of terms) {
@@ -340,18 +347,20 @@ export class JobsService {
     return { AND: and };
   }
 
-  private async decorate(userId: string, jobs: ListedJob[], skills: string[]) {
+  private async decorate(userId: string | undefined, jobs: ListedJob[], skills: string[]) {
     const ids = jobs.map((j) => j.id);
-    const [saved, applied] = await Promise.all([
-      this.prisma.savedJob.findMany({
-        where: { userId, jobId: { in: ids } },
-        select: { jobId: true },
-      }),
-      this.prisma.application.findMany({
-        where: { userId, jobId: { in: ids } },
-        select: { jobId: true, status: true },
-      }),
-    ]);
+    const [saved, applied] = userId
+      ? await Promise.all([
+          this.prisma.savedJob.findMany({
+            where: { userId, jobId: { in: ids } },
+            select: { jobId: true },
+          }),
+          this.prisma.application.findMany({
+            where: { userId, jobId: { in: ids } },
+            select: { jobId: true, status: true },
+          }),
+        ])
+      : [[], []];
     const savedSet = new Set(saved.map((s) => s.jobId));
     const appliedMap = new Map(applied.map((a) => [a.jobId, a.status]));
 

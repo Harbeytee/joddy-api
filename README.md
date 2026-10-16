@@ -32,15 +32,15 @@ npm run jobs:backfill-geo
 
 ## Scripts
 
-| Script | What it does |
-| --- | --- |
-| `start:dev` | Compile in watch mode and restart on change |
-| `build` / `start` | Production build to `dist/` and run it |
-| `test` | Unit tests |
-| `test:e2e` | Builds the API, starts it against `joddy_test` (or `TEST_DATABASE_URL`) and tests it over HTTP |
-| `lint` / `typecheck` / `format` | Code quality |
-| `db:migrate` | Create a migration from schema changes (dev) |
-| `db:deploy` | Apply migrations (CI / prod) |
+| Script                          | What it does                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `start:dev`                     | Compile in watch mode and restart on change                                                    |
+| `build` / `start`               | Production build to `dist/` and run it                                                         |
+| `test`                          | Unit tests                                                                                     |
+| `test:e2e`                      | Builds the API, starts it against `joddy_test` (or `TEST_DATABASE_URL`) and tests it over HTTP |
+| `lint` / `typecheck` / `format` | Code quality                                                                                   |
+| `db:migrate`                    | Create a migration from schema changes (dev)                                                   |
+| `db:deploy`                     | Apply migrations (CI / prod)                                                                   |
 
 ## Docker
 
@@ -68,11 +68,14 @@ src/
     health/         liveness / readiness probes
 ```
 
-All routes are under `/api/v1` and require auth unless marked `@Public()`.
+All routes are under `/api/v1` and require auth unless marked otherwise:
+
+- `@Public()` routes ignore auth entirely.
+- `@OptionalAuth()` routes are open to guests but personalised for signed-in users. Job search, facets and job details use it. Guests get no hidden jobs, saved state or match scores. A token that is present but invalid still gets a 401, so the client refreshes instead of quietly getting guest data.
 
 ### Auth
 
-- The access token (JWT, 15 min) is set in the `joddy_at` httpOnly cookie. `Authorization: Bearer` also works for non-browser clients.
+- The access token (JWT, 15 min) is set in the `joddy_at` httpOnly cookie. `Authorization: Bearer` also works for non-browser clients. The cookie lives as long as the refresh token, so an expired session is still recognised on `@OptionalAuth()` routes.
 - The refresh token is an opaque random value in `joddy_rt`, scoped to `/api/v1/auth`. Only its SHA-256 hash is stored.
 - Refresh tokens rotate on every use. Replaying a rotated token (outside a 30s grace window for concurrent tabs) revokes all of the user's sessions.
 - Changing your password signs out every device. Deleting your account requires your password.

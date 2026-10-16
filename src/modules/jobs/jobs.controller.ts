@@ -15,7 +15,7 @@ import {
 import { ApiHeader, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
-import { Public } from '../../common/decorators/public.decorator';
+import { OptionalAuth, Public } from '../../common/decorators/public.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { DeactivateStaleDto, IngestBatchDto } from './dto/ingest.dto';
 import { JobsQueryDto } from './dto/jobs-query.dto';
@@ -27,9 +27,10 @@ import { JobsService } from './jobs.service';
 export class JobsController {
   constructor(private readonly jobs: JobsService) {}
 
+  @OptionalAuth()
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query() q: JobsQueryDto) {
-    return this.jobs.list(user.id, q);
+  list(@CurrentUser() user: AuthUser | undefined, @Query() q: JobsQueryDto) {
+    return this.jobs.list(user?.id, q);
   }
 
   @Get('saved')
@@ -37,19 +38,22 @@ export class JobsController {
     return this.jobs.listSaved(user.id, q);
   }
 
+  @Public()
   @Get('locations')
   locations() {
     return this.jobs.locations();
   }
 
+  @OptionalAuth()
   @Get('facets')
-  facets(@CurrentUser() user: AuthUser, @Query() q: JobsQueryDto) {
-    return this.jobs.facets(user.id, q);
+  facets(@CurrentUser() user: AuthUser | undefined, @Query() q: JobsQueryDto) {
+    return this.jobs.facets(user?.id, q);
   }
 
+  @OptionalAuth()
   @Get(':id')
-  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.jobs.get(user.id, id);
+  get(@CurrentUser() user: AuthUser | undefined, @Param('id', ParseUUIDPipe) id: string) {
+    return this.jobs.get(user?.id, id);
   }
 
   @Put(':id/save')

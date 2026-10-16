@@ -5,14 +5,14 @@ import type { Request } from 'express';
 import { AppConfigService } from '../../config/app-config.service';
 import { ACCESS_COOKIE } from '../../modules/auth/auth.constants';
 import type { AuthenticatedRequest } from '../decorators/current-user.decorator';
-import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { IS_OPTIONAL_AUTH_KEY, IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 interface AccessPayload {
   sub: string;
   email: string;
 }
 
-/** Global guard: every route needs a valid access token unless marked @Public(). */
+/** Global guard: every route needs a valid access token unless marked @Public() or @OptionalAuth(). */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -22,15 +22,16 @@ export class JwtAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-    if (isPublic) return true;
+    const targets = [context.getHandler(), context.getClass()];
+    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, targets)) return true;
+    const isOptional = this.reflector.getAllAndOverride<boolean>(IS_OPTIONAL_AUTH_KEY, targets);
 
     const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = extractToken(req);
-    if (!token) throw new UnauthorizedException('Not signed in');
+    if (!token) {
+      if (isOptional) return true;
+      throw new UnauthorizedException('Not signed in');
+    }
 
     try {
       const payload = await this.jwt.verifyAsync<AccessPayload>(token, {

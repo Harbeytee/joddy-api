@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { CookieOptions, Response } from 'express';
 import { AppConfigService } from '../../config/app-config.service';
-import { durationToMs } from '../../common/utils/duration';
 import type { IssuedTokens } from './auth.service';
 import { ACCESS_COOKIE, REFRESH_COOKIE, REFRESH_COOKIE_PATH } from './auth.constants';
 
@@ -10,10 +9,12 @@ export class AuthCookiesService {
   constructor(private readonly config: AppConfigService) {}
 
   set(res: Response, tokens: IssuedTokens): void {
+    // The cookie outlives the short-lived JWT inside it, so @OptionalAuth routes see an expired
+    // token (401, client refreshes) rather than no token (served as a guest).
     res.cookie(ACCESS_COOKIE, tokens.accessToken, {
       ...this.base(),
       path: '/',
-      maxAge: durationToMs(this.config.get('JWT_ACCESS_TTL')),
+      expires: tokens.refreshExpiresAt,
     });
     res.cookie(REFRESH_COOKIE, tokens.refreshToken, {
       ...this.base(),
