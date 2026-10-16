@@ -21,6 +21,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "jobs:import": "tsx scripts/import-jobs.ts",
+    "jobs:backfill-geo": "tsx scripts/backfill-job-geo.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

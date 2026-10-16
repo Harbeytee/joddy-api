@@ -13,7 +13,8 @@ import {
   Min,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { Seniority, WorkplaceType } from '../../../generated/prisma/enums';
+import { JobType, Region, Seniority, WorkplaceType } from '../../../generated/prisma/enums';
+import { COUNTRY_CODES } from '../geo/countries';
 
 const toBool = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1';
@@ -56,6 +57,30 @@ export class JobsQueryDto extends PaginationQueryDto {
   @ArrayMaxSize(Object.keys(Seniority).length)
   @IsEnum(Seniority, { each: true })
   seniority?: Seniority[];
+
+  @ApiPropertyOptional({ enum: JobType, isArray: true, description: 'Any of these job types' })
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @ArrayMaxSize(Object.keys(JobType).length)
+  @IsEnum(JobType, { each: true })
+  jobType?: JobType[];
+
+  @ApiPropertyOptional({ enum: Region, description: 'Remote jobs advertised for this region' })
+  @IsOptional()
+  @IsEnum(Region)
+  remoteRegion?: Region;
+
+  @ApiPropertyOptional({
+    example: 'GB',
+    description: 'Remote jobs open in this country (ISO 3166-1 alpha-2)',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.toUpperCase() : value,
+  )
+  @IsIn([...COUNTRY_CODES])
+  remoteCountry?: string;
 
   @ApiPropertyOptional({ description: 'Only jobs posted within this many days' })
   @IsOptional()

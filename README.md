@@ -24,6 +24,12 @@ npm run jobs:import -- ~/job-scraper/data/jobs.jsonl
 
 The import upserts in batches of 500 through `POST /jobs/ingest` (protected by `INGEST_API_KEY`) and then marks jobs that are no longer listed as inactive. Pass `--keep-stale` to skip that step, or `--limit N` for a partial import.
 
+Ingest derives each job's seniority, job type and remote scope (countries and regions such as EMEA or Worldwide) from its title, employment type and locations. After changing the location parser in `src/modules/jobs/geo`, re-derive the scope of existing jobs with:
+
+```bash
+npm run jobs:backfill-geo
+```
+
 ## Scripts
 
 | Script | What it does |

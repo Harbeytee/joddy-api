@@ -79,8 +79,13 @@ model Job {
   location       String?
   locations      String[]       @default([])
   workplaceType  WorkplaceType?
+  /// Raw text from the ATS; `jobType` is the normalised value
   employmentType String?
+  jobType        JobType?
   seniority      Seniority?
+  /// ISO 3166-1 alpha-2 codes and regions parsed from the location strings
+  countries      String[]       @default([])
+  regions        Region[]       @default([])
   salaryMin      Int?
   salaryMax      Int?
   salaryCurrency String?
@@ -100,6 +105,8 @@ model Job {
 
   @@index([isActive, postedAt(sort: Desc)])
   @@index([isActive, seniority, postedAt(sort: Desc)])
+  @@index([countries], type: Gin)
+  @@index([regions], type: Gin)
   @@index([companySlug])
   /// Trigram indexes make case-insensitive "contains" search fast (needs the pg_trgm extension).
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "jobs_title_trgm_idx")
@@ -146,6 +153,20 @@ enum JobType {
   PART_TIME
   CONTRACT
   INTERNSHIP
+  TEMPORARY
+}
+
+/// Broad areas named in a job's location; see locationScope().
+enum Region {
+  WORLDWIDE
+  AMERICAS
+  NORTH_AMERICA
+  LATAM
+  EMEA
+  EUROPE
+  MIDDLE_EAST
+  AFRICA
+  APAC
 }
 
 enum AppliedVia {

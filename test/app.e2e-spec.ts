@@ -301,6 +301,66 @@ describe('Joddy API (e2e)', () => {
       const job = await http.get(`${API}/jobs/${jobId}`).set('Cookie', auth()).expect(200);
       expect(job.body.application).toMatchObject({ status: 'APPLIED' });
     });
+
+    it('filters by job type and remote area', async () => {
+      const remote = (id: string, overrides: Record<string, unknown>) =>
+        sampleJob(id, { workplaceType: 'remote', description: '', locations: [], ...overrides });
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({
+          jobs: [
+            remote('emea', {
+              title: 'Account Manager',
+              location: 'Remote - EMEA',
+              employmentType: 'Full-time',
+            }),
+            remote('us', {
+              title: 'Support Specialist',
+              location: 'Remote - USA',
+              employmentType: 'Contract',
+            }),
+            // No workplace type from the ATS: inferred from the location.
+            remote('ww', {
+              title: 'Community Lead',
+              location: 'World Wide - Remote',
+              workplaceType: undefined,
+              employmentType: 'parttime permanent',
+            }),
+          ],
+        })
+        .expect(200);
+
+      const titles = async (query: string) => {
+        const res = await http.get(`${API}/jobs?${query}`).set('Cookie', auth()).expect(200);
+        return (res.body.items as { title: string }[]).map((j) => j.title).sort();
+      };
+      expect(await titles('remoteRegion=EMEA')).toEqual(['Account Manager']);
+      expect(await titles('remoteRegion=WORLDWIDE')).toEqual(['Community Lead']);
+      expect(await titles('remoteCountry=us')).toEqual(['Support Specialist']);
+      expect(await titles('jobType=CONTRACT,PART_TIME')).toEqual([
+        'Community Lead',
+        'Support Specialist',
+      ]);
+      await http.get(`${API}/jobs?remoteCountry=XX`).set('Cookie', auth()).expect(400);
+      await http.get(`${API}/jobs?jobType=GIG`).set('Cookie', auth()).expect(400);
+
+      const list = await http.get(`${API}/jobs?remoteRegion=EMEA`).set('Cookie', auth());
+      expect(list.body.items[0]).toMatchObject({
+        jobType: 'FULL_TIME',
+        regions: ['EMEA'],
+        countries: [],
+      });
+
+      const areas = await http.get(`${API}/jobs/remote-areas`).set('Cookie', auth()).expect(200);
+      expect(areas.body.regions).toEqual(
+        expect.arrayContaining([
+          { region: 'EMEA', count: 1 },
+          { region: 'WORLDWIDE', count: 1 },
+        ]),
+      );
+      expect(areas.body.countries).toEqual([{ code: 'US', count: 1 }]);
+    });
   });
 
   describe('applications', () => {

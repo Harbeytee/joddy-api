@@ -1,4 +1,22 @@
-import { descriptionSnippet, seniorityFromTitle } from './job-text';
+import { descriptionSnippet, jobTypeFromText, seniorityFromTitle } from './job-text';
+
+describe('jobTypeFromText', () => {
+  it.each([
+    ['Full-time', 'FULL_TIME'],
+    ['fulltime permanent', 'FULL_TIME'],
+    ['FULL_TIME', 'FULL_TIME'],
+    ['Part-Time', 'PART_TIME'],
+    ['parttime fixed term', 'PART_TIME'],
+    ['contract', 'CONTRACT'],
+    ['Freelance', 'CONTRACT'],
+    ['Intern', 'INTERNSHIP'],
+    ['Seasonal', 'TEMPORARY'],
+    ['Other', null],
+    [null, null],
+  ])('%p → %p', (raw, expected) => {
+    expect(jobTypeFromText(raw)).toBe(expected);
+  });
+});
 
 describe('seniorityFromTitle', () => {
   it.each([

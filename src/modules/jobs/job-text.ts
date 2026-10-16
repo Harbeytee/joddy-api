@@ -1,4 +1,20 @@
-import { Seniority } from '../../generated/prisma/enums';
+import { JobType, Seniority } from '../../generated/prisma/enums';
+
+/**
+ * ATSs report employment type as free text ("Full-time", "fulltime permanent", "FULL_TIME").
+ * Keep in sync with the backfill in the `job_type_and_geo` migration.
+ */
+export function jobTypeFromText(raw: string | null | undefined): JobType | null {
+  const s = raw?.toLowerCase().replace(/[^a-z]/g, '') ?? '';
+  if (s.startsWith('fulltime') || s === 'permanent') return JobType.FULL_TIME;
+  if (s.startsWith('parttime')) return JobType.PART_TIME;
+  if (s.startsWith('contract') || s.startsWith('freelance')) return JobType.CONTRACT;
+  if (s.startsWith('intern')) return JobType.INTERNSHIP;
+  if (s.startsWith('temp') || s.startsWith('seasonal') || s.includes('fixedterm')) {
+    return JobType.TEMPORARY;
+  }
+  return null;
+}
 
 const STAFF_ROLES =
   'software|engineer|data|machine|ml|ai|product|designer|scientist|developer|backend|frontend|full[- ]?stack|platform|security|infrastructure|site|research|mobile|ios|android';

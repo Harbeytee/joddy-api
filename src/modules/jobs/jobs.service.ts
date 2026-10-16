@@ -1,11 +1,12 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { paginate, PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { Prisma, type Job } from '../../generated/prisma/client';
-import { Seniority } from '../../generated/prisma/enums';
+import { Region, Seniority, WorkplaceType } from '../../generated/prisma/enums';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DeactivateStaleDto, IngestJobDto } from './dto/ingest.dto';
 import type { JobsQueryDto } from './dto/jobs-query.dto';
-import { descriptionSnippet, seniorityFromTitle } from './job-text';
+import { locationScope, looksRemote } from './geo/location-scope';
+import { descriptionSnippet, jobTypeFromText, seniorityFromTitle } from './job-text';
 import { matchJob } from './matching';
 
 const LIST_SELECT = {
@@ -19,7 +20,10 @@ const LIST_SELECT = {
   locations: true,
   workplaceType: true,
   employmentType: true,
+  jobType: true,
   seniority: true,
+  countries: true,
+  regions: true,
   salaryMin: true,
   salaryMax: true,
   salaryCurrency: true,
@@ -34,9 +38,50 @@ const LIST_SELECT = {
 
 type ListedJob = Prisma.JobGetPayload<{ select: typeof LIST_SELECT }>;
 
+const REMOTE_AREAS_TTL_MS = 10 * 60_000;
+
+export interface RemoteAreas {
+  regions: { region: Region; count: number }[];
+  countries: { code: string; count: number }[];
+}
+
 @Injectable()
 export class JobsService {
+  private remoteAreasCache: { expiresAt: number; value: Promise<RemoteAreas> } | null = null;
+
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Regions and countries that currently have remote jobs, for the filter UI. Cached briefly. */
+  remoteAreas(): Promise<RemoteAreas> {
+    if (this.remoteAreasCache && this.remoteAreasCache.expiresAt > Date.now()) {
+      return this.remoteAreasCache.value;
+    }
+    const value = this.loadRemoteAreas();
+    this.remoteAreasCache = { expiresAt: Date.now() + REMOTE_AREAS_TTL_MS, value };
+    value.catch(() => (this.remoteAreasCache = null));
+    return value;
+  }
+
+  private async loadRemoteAreas(): Promise<RemoteAreas> {
+    const [regions, countries] = await Promise.all([
+      this.prisma.$queryRaw<{ region: Region; count: bigint }[]>`
+        SELECT r AS region, count(*) AS count
+        FROM jobs, unnest(regions) AS r
+        WHERE "isActive" AND "workplaceType" = 'REMOTE'
+        GROUP BY r ORDER BY count DESC
+      `,
+      this.prisma.$queryRaw<{ code: string; count: bigint }[]>`
+        SELECT c AS code, count(*) AS count
+        FROM jobs, unnest(countries) AS c
+        WHERE "isActive" AND "workplaceType" = 'REMOTE'
+        GROUP BY c ORDER BY count DESC
+      `,
+    ]);
+    return {
+      regions: regions.map((r) => ({ region: r.region, count: Number(r.count) })),
+      countries: countries.map((c) => ({ code: c.code, count: Number(c.count) })),
+    };
+  }
 
   async list(userId: string, q: JobsQueryDto) {
     const where = this.buildWhere(userId, q);
@@ -131,44 +176,56 @@ export class JobsService {
    * far too slow for the ~250k jobs a full scrape produces.
    */
   async ingest(jobs: IngestJobDto[]): Promise<{ upserted: number }> {
-    const rows = jobs.map((j) => ({
-      externalId: j.id,
-      source: j.source,
-      companySlug: j.company,
-      companyName: j.companyName,
-      title: j.title,
-      department: j.department ?? null,
-      location: j.location ?? null,
-      locations: j.locations ?? [],
-      workplaceType: j.workplaceType ? j.workplaceType.toUpperCase() : null,
-      employmentType: j.employmentType ?? null,
-      seniority: seniorityFromTitle(j.title),
-      salaryMin: roundOrNull(j.salary?.min),
-      salaryMax: roundOrNull(j.salary?.max),
-      salaryCurrency: j.salary?.currency ?? null,
-      salaryInterval: j.salary?.interval ?? null,
-      description: j.description ?? '',
-      url: j.url,
-      applyUrl: j.applyUrl ?? j.url,
-      postedAt: j.postedAt ?? null,
-    }));
+    const rows = jobs.map((j) => {
+      const places = [j.location, ...(j.locations ?? [])];
+      const workplaceType = j.workplaceType
+        ? j.workplaceType.toUpperCase()
+        : looksRemote(places)
+          ? WorkplaceType.REMOTE
+          : null;
+      return {
+        externalId: j.id,
+        source: j.source,
+        companySlug: j.company,
+        companyName: j.companyName,
+        title: j.title,
+        department: j.department ?? null,
+        location: j.location ?? null,
+        locations: j.locations ?? [],
+        workplaceType,
+        employmentType: j.employmentType ?? null,
+        jobType: jobTypeFromText(j.employmentType),
+        seniority: seniorityFromTitle(j.title),
+        ...locationScope(places),
+        salaryMin: roundOrNull(j.salary?.min),
+        salaryMax: roundOrNull(j.salary?.max),
+        salaryCurrency: j.salary?.currency ?? null,
+        salaryInterval: j.salary?.interval ?? null,
+        description: j.description ?? '',
+        url: j.url,
+        applyUrl: j.applyUrl ?? j.url,
+        postedAt: j.postedAt ?? null,
+      };
+    });
 
     const upserted = await this.prisma.$executeRaw`
       INSERT INTO jobs (
         id, "externalId", source, "companySlug", "companyName", title, department, location, locations,
-        "workplaceType", "employmentType", seniority, "salaryMin", "salaryMax", "salaryCurrency", "salaryInterval",
+        "workplaceType", "employmentType", "jobType", seniority, countries, regions,
+        "salaryMin", "salaryMax", "salaryCurrency", "salaryInterval",
         description, url, "applyUrl", "postedAt", "firstSeenAt", "lastSeenAt", "isActive"
       )
       SELECT
         gen_random_uuid(), r."externalId", r.source, r."companySlug", r."companyName", r.title, r.department,
         r.location, r.locations, r."workplaceType"::"WorkplaceType", r."employmentType",
-        r.seniority::"Seniority", r."salaryMin",
-        r."salaryMax", r."salaryCurrency", r."salaryInterval", r.description, r.url, r."applyUrl",
-        r."postedAt", now(), now(), true
+        r."jobType"::"JobType", r.seniority::"Seniority", r.countries, r.regions::"Region"[],
+        r."salaryMin", r."salaryMax", r."salaryCurrency", r."salaryInterval", r.description, r.url,
+        r."applyUrl", r."postedAt", now(), now(), true
       FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(
         "externalId" text, source text, "companySlug" text, "companyName" text, title text,
         department text, location text, locations text[], "workplaceType" text, "employmentType" text,
-        seniority text, "salaryMin" int, "salaryMax" int, "salaryCurrency" text, "salaryInterval" text,
+        "jobType" text, seniority text, countries text[], regions text[],
+        "salaryMin" int, "salaryMax" int, "salaryCurrency" text, "salaryInterval" text,
         description text, url text, "applyUrl" text, "postedAt" timestamptz
       )
       ON CONFLICT ("externalId") DO UPDATE SET
@@ -179,7 +236,10 @@ export class JobsService {
         locations = EXCLUDED.locations,
         "workplaceType" = EXCLUDED."workplaceType",
         "employmentType" = EXCLUDED."employmentType",
+        "jobType" = EXCLUDED."jobType",
         seniority = EXCLUDED.seniority,
+        countries = EXCLUDED.countries,
+        regions = EXCLUDED.regions,
         "salaryMin" = EXCLUDED."salaryMin",
         "salaryMax" = EXCLUDED."salaryMax",
         "salaryCurrency" = EXCLUDED."salaryCurrency",
@@ -239,6 +299,14 @@ export class JobsService {
       });
     }
     if (q.workplaceType) and.push({ workplaceType: q.workplaceType });
+    if (q.jobType?.length) and.push({ jobType: { in: q.jobType } });
+    // Remote areas are categories: "EMEA" means jobs advertised as remote across EMEA.
+    if (q.remoteRegion) {
+      and.push({ workplaceType: WorkplaceType.REMOTE, regions: { has: q.remoteRegion } });
+    }
+    if (q.remoteCountry) {
+      and.push({ workplaceType: WorkplaceType.REMOTE, countries: { has: q.remoteCountry } });
+    }
     if (q.source) and.push({ source: q.source });
     if (q.postedWithinDays) {
       and.push({ postedAt: { gte: new Date(Date.now() - q.postedWithinDays * 86_400_000) } });
