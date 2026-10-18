@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { weekStartsIn } from '../../common/utils/time-zone';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AgentService } from '../agent/agent.service';
 import { ApplicationsService } from '../applications/applications.service';
@@ -17,8 +18,9 @@ export class DashboardService {
     private readonly jobs: JobsService,
   ) {}
 
-  async summary(userId: string) {
-    const since = startOfWeek(new Date(Date.now() - (WEEKS - 1) * 7 * 86_400_000));
+  async summary(userId: string, timeZone = 'UTC') {
+    const weekStarts = weekStartsIn(new Date(), WEEKS, timeZone);
+    const since = weekStarts[0];
 
     const [stats, agent, savedJobs, recent, applied, recommended] = await Promise.all([
       this.applications.stats(userId),
@@ -44,13 +46,10 @@ export class DashboardService {
       this.recommended(userId),
     ]);
 
-    const weekly = Array.from({ length: WEEKS }, (_, i) => ({
-      weekStart: new Date(since.getTime() + i * 7 * 86_400_000).toISOString(),
-      count: 0,
-    }));
+    const weekly = weekStarts.map((start) => ({ weekStart: start.toISOString(), count: 0 }));
     for (const a of applied) {
-      const idx = Math.floor((a.appliedAt.getTime() - since.getTime()) / (7 * 86_400_000));
-      if (weekly[idx]) weekly[idx].count++;
+      const idx = weekStarts.findLastIndex((start) => a.appliedAt >= start);
+      if (idx >= 0) weekly[idx].count++;
     }
 
     const responded = stats.INTERVIEW + stats.OFFER + stats.REJECTED;
@@ -89,6 +88,7 @@ export class DashboardService {
         location: true,
         workplaceType: true,
         postedAt: true,
+        postedDateOnly: true,
         description: true,
       },
     });
@@ -102,11 +102,4 @@ export class DashboardService {
       .sort((a, b) => b.match.score - a.match.score)
       .slice(0, 5);
   }
-}
-
-function startOfWeek(d: Date): Date {
-  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  const day = (date.getUTCDay() + 6) % 7; // Monday = 0
-  date.setUTCDate(date.getUTCDate() - day);
-  return date;
 }

@@ -15,6 +15,7 @@ import {
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { JobType, Region, Seniority, WorkplaceType } from '../../../generated/prisma/enums';
 import { COUNTRY_CODES } from '../geo/countries';
+import { MAX_TITLES } from '../search-limits';
 
 const toBool = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1';
@@ -36,6 +37,19 @@ export class JobsQueryDto extends PaginationQueryDto {
   @IsString()
   @MaxLength(200)
   q?: string;
+
+  @ApiPropertyOptional({
+    isArray: true,
+    example: ['frontend', 'front-end', 'react developer'],
+    description: 'Job titles containing any of these phrases (what "Ask AI" search produces)',
+  })
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @ArrayMaxSize(MAX_TITLES)
+  @IsString({ each: true })
+  @MaxLength(60, { each: true })
+  title?: string[];
 
   @ApiPropertyOptional({ example: 'London' })
   @IsOptional()

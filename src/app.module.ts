@@ -1,10 +1,9 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { LoggerModule } from 'nestjs-pino';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { AppConfigService } from './config/app-config.service';
+import { AppLoggerModule } from './common/logger.module';
 import { AppConfigModule } from './config/config.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
@@ -19,25 +18,11 @@ import { PrismaModule } from './prisma/prisma.module';
 @Module({
   imports: [
     AppConfigModule,
-    LoggerModule.forRootAsync({
-      inject: [AppConfigService],
-      useFactory: (config: AppConfigService) => ({
-        pinoHttp: {
-          level: config.get('LOG_LEVEL'),
-          transport: config.isProduction
-            ? undefined
-            : { target: 'pino-pretty', options: { singleLine: true } },
-          redact: [
-            'req.headers.authorization',
-            'req.headers.cookie',
-            'req.headers["x-ingest-key"]',
-            'res.headers["set-cookie"]',
-          ],
-          autoLogging: { ignore: (req) => req.url?.startsWith('/api/v1/health') ?? false },
-        },
-      }),
+    AppLoggerModule,
+    ThrottlerModule.forRoot({
+      throttlers: [{ name: 'default', ttl: 60_000, limit: 120 }],
+      errorMessage: 'Too many requests. Wait a minute and try again.',
     }),
-    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 120 }]),
     PrismaModule,
     HealthModule,
     AuthModule,

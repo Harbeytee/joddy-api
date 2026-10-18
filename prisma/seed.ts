@@ -1,14 +1,14 @@
 import 'dotenv/config';
-import { PrismaPg } from '@prisma/adapter-pg';
 import * as argon2 from 'argon2';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { prismaAdapter } from '../src/prisma/adapter';
 
 const DEMO_EMAIL = 'demo@joddy.app';
 const DEMO_PASSWORD = 'joddy-demo-2026';
 
 async function main() {
   const prisma = new PrismaClient({
-    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+    adapter: prismaAdapter(process.env.DATABASE_URL),
   });
 
   try {
@@ -28,7 +28,7 @@ async function main() {
       data: {
         email: DEMO_EMAIL,
         name: 'Ada Okafor',
-        headline: 'Frontend engineer, 4 years in fintech',
+        headline: 'Frontend Engineer',
         location: 'London, UK',
         passwordHash: await argon2.hash(DEMO_PASSWORD),
         skills,

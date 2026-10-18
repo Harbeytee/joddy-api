@@ -22,7 +22,6 @@ export default async function globalSetup() {
     env,
     stdio: ['ignore', 'ignore', 'inherit'],
   });
-  child.unref();
   globalThis.__JODDY_API__ = child;
 
   for (let i = 0; i < 100; i++) {

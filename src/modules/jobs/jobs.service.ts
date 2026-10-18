@@ -8,6 +8,7 @@ import type { JobsQueryDto } from './dto/jobs-query.dto';
 import { COUNTRY_CODES } from './geo/countries';
 import { locationScope, looksRemote } from './geo/location-scope';
 import { locationMatch, REGION_ORDER } from './geo/regions';
+import { isDateOnly } from './feed/job-feed';
 import { descriptionSnippet, jobTypeFromText, seniorityFromTitle } from './job-text';
 import { matchJob } from './matching';
 
@@ -33,6 +34,7 @@ const LIST_SELECT = {
   url: true,
   applyUrl: true,
   postedAt: true,
+  postedDateOnly: true,
   firstSeenAt: true,
   // Needed for match scoring and the snippet; stripped before the list is returned.
   description: true,
@@ -218,6 +220,7 @@ export class JobsService {
         url: j.url,
         applyUrl: j.applyUrl ?? j.url,
         postedAt: j.postedAt ?? null,
+        postedDateOnly: isDateOnly(j.postedAt),
       };
     });
 
@@ -226,20 +229,21 @@ export class JobsService {
         id, "externalId", source, "companySlug", "companyName", title, department, location, locations,
         "workplaceType", "employmentType", "jobType", seniority, countries, regions,
         "salaryMin", "salaryMax", "salaryCurrency", "salaryInterval",
-        description, url, "applyUrl", "postedAt", "firstSeenAt", "lastSeenAt", "isActive"
+        description, url, "applyUrl", "postedAt", "postedDateOnly", "firstSeenAt", "lastSeenAt", "isActive"
       )
       SELECT
         gen_random_uuid(), r."externalId", r.source, r."companySlug", r."companyName", r.title, r.department,
         r.location, r.locations, r."workplaceType"::"WorkplaceType", r."employmentType",
         r."jobType"::"JobType", r.seniority::"Seniority", r.countries, r.regions::"Region"[],
         r."salaryMin", r."salaryMax", r."salaryCurrency", r."salaryInterval", r.description, r.url,
-        r."applyUrl", r."postedAt", now(), now(), true
+        r."applyUrl", r."postedAt" AT TIME ZONE 'UTC', r."postedDateOnly", now() AT TIME ZONE 'UTC',
+        now() AT TIME ZONE 'UTC', true
       FROM jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) AS r(
         "externalId" text, source text, "companySlug" text, "companyName" text, title text,
         department text, location text, locations text[], "workplaceType" text, "employmentType" text,
         "jobType" text, seniority text, countries text[], regions text[],
         "salaryMin" int, "salaryMax" int, "salaryCurrency" text, "salaryInterval" text,
-        description text, url text, "applyUrl" text, "postedAt" timestamptz
+        description text, url text, "applyUrl" text, "postedAt" timestamptz, "postedDateOnly" boolean
       )
       ON CONFLICT ("externalId") DO UPDATE SET
         "companyName" = EXCLUDED."companyName",
@@ -261,7 +265,9 @@ export class JobsService {
         url = EXCLUDED.url,
         "applyUrl" = EXCLUDED."applyUrl",
         "postedAt" = COALESCE(EXCLUDED."postedAt", jobs."postedAt"),
-        "lastSeenAt" = now(),
+        "postedDateOnly" = CASE WHEN EXCLUDED."postedAt" IS NULL THEN jobs."postedDateOnly"
+                                ELSE EXCLUDED."postedDateOnly" END,
+        "lastSeenAt" = now() AT TIME ZONE 'UTC',
         "isActive" = true
     `;
     return { upserted };
@@ -303,6 +309,10 @@ export class JobsService {
           { companyName: { contains: term, mode: 'insensitive' } },
         ],
       });
+    }
+    const titles = (q.title ?? []).map((t) => t.trim()).filter(Boolean);
+    if (titles.length) {
+      and.push({ OR: titles.map((t) => ({ title: { contains: t, mode: 'insensitive' } })) });
     }
     if (q.location?.trim()) {
       and.push({ location: { contains: q.location.trim(), mode: 'insensitive' } });

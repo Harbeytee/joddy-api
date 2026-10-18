@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Client } from 'pg';
 import request from 'supertest';
@@ -57,6 +58,32 @@ describe('Joddy API (e2e)', () => {
       await http.get(`${API}/health/live`).expect(200);
       const res = await http.get(`${API}/health/ready`).expect(200);
       expect(res.body).toEqual({ status: 'ok', database: 'up' });
+    });
+  });
+
+  describe('request size', () => {
+    const padding = 'x'.repeat(1.5 * 1024 * 1024);
+
+    it('refuses bodies over 1 MB on ordinary routes', async () => {
+      const res = await http
+        .post(`${API}/auth/login`)
+        .send({ ...credentials, padding })
+        .expect(413);
+      expect(res.body).toMatchObject({ statusCode: 413 });
+    });
+
+    it('allows bigger bodies for job imports and resumes', async () => {
+      // Past the body parser, so these fail on auth or validation instead.
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({ jobs: [], padding })
+        .expect(400);
+      await http.post(`${API}/resumes`).send({ padding }).expect(401);
+      await http
+        .post(`${API}/resumes`)
+        .send({ padding: 'x'.repeat(6 * 1024 * 1024) })
+        .expect(413);
     });
   });
 
@@ -236,6 +263,7 @@ describe('Joddy API (e2e)', () => {
         .set('Cookie', auth())
         .expect(200);
       expect(res.body.items[0].seniority).toBe('SENIOR');
+      expect(res.body.items[0].postedAt).toBe('2020-01-01T00:00:00.000Z');
     });
 
     it('filters by seniority, treating titles without a level as mid level', async () => {
@@ -248,6 +276,42 @@ describe('Joddy API (e2e)', () => {
       expect(await titles('seniority=SENIOR&seniority=MID')).toHaveLength(3);
       expect(await titles('seniority=SENIOR,INTERN')).toEqual(['Senior QA Engineer']);
       await http.get(`${API}/jobs?seniority=WIZARD`).set('Cookie', auth()).expect(400);
+    });
+
+    it('matches titles containing any of several phrases', async () => {
+      const titles = async (query: string) => {
+        const res = await http.get(`${API}/jobs?${query}`).set('Cookie', auth()).expect(200);
+        return (res.body.items as { title: string }[]).map((j) => j.title).sort();
+      };
+      expect(await titles('title=front-end,frontend,qa')).toEqual([
+        'Frontend Engineer',
+        'Senior QA Engineer',
+      ]);
+      expect(await titles('title=backend%20engineer')).toEqual(['Backend Engineer']);
+      expect(await titles('title=frontend&seniority=SENIOR')).toEqual([]);
+      const facets = await http.get(`${API}/jobs/facets?title=engineer`).expect(200);
+      expect(facets.body.total).toBe(3);
+      await http.get(`${API}/jobs?title=${'x'.repeat(61)}`).expect(400);
+    });
+
+    it('needs an account for AI search, and turns it off when no Gemini key is set', async () => {
+      await http.get(`${API}/ai/status`).expect(200, { enabled: false });
+      const prompt = { prompt: 'remote frontend jobs in Europe' };
+      await http.post(`${API}/jobs/ai-search`).send(prompt).expect(401);
+      const res = await http
+        .post(`${API}/jobs/ai-search`)
+        .set('Cookie', auth())
+        .send(prompt)
+        .expect(503);
+      expect(res.body.message).toMatch(/isn’t available/);
+    });
+
+    it('validates AI search prompts', async () => {
+      const send = (body: object) =>
+        http.post(`${API}/jobs/ai-search`).set('Cookie', auth()).send(body).expect(400);
+      await send({ prompt: ' a ' });
+      await send({ prompt: 'x'.repeat(501) });
+      await send({ prompt: 'nurse jobs near me', homeCountry: 'ZZ' });
     });
 
     it('hides a job from search and saved jobs until it is unhidden', async () => {
@@ -499,6 +563,247 @@ describe('Joddy API (e2e)', () => {
     });
   });
 
+  describe('resumes', () => {
+    const content = {
+      personal: { fullName: 'Test User', headline: 'Frontend Engineer' },
+      summary: 'Builds fast interfaces.',
+      experience: [{ position: 'Engineer', company: 'Monzo', current: true }],
+      skills: ['Vue'],
+      projects: [{ name: 'Design system', url: 'github.com/test/ds' }],
+      certifications: [{ name: 'AWS Developer', issuer: 'Amazon', date: '2025' }],
+      languages: [{ name: 'English', level: 'native' }],
+      interests: ['Chess'],
+    };
+
+    it('stores the template, design and every section', async () => {
+      const created = await http
+        .post(`${API}/resumes`)
+        .set('Cookie', auth())
+        .send({
+          title: 'Frontend',
+          template: 'sidebar',
+          design: {
+            accent: '#0F766E',
+            font: 'lora',
+            spacing: 'compact',
+            sectionOrder: ['skills', 'experience'],
+          },
+          content,
+        })
+        .expect(201);
+      expect(created.body).toMatchObject({
+        template: 'sidebar',
+        isDefault: true,
+        design: {
+          accent: '#0F766E',
+          font: 'lora',
+          spacing: 'compact',
+          sectionOrder: ['skills', 'experience'],
+        },
+        content: { ...content, education: [] },
+      });
+
+      const updated = await http
+        .patch(`${API}/resumes/${created.body.id}`)
+        .set('Cookie', auth())
+        .send({ template: 'harvard', design: { fontSize: 'lg' } })
+        .expect(200);
+      expect(updated.body).toMatchObject({
+        template: 'harvard',
+        design: { fontSize: 'lg' },
+        content,
+      });
+
+      const copy = await http
+        .post(`${API}/resumes/${created.body.id}/duplicate`)
+        .set('Cookie', auth())
+        .expect(201);
+      expect(copy.body).toMatchObject({
+        title: 'Frontend (copy)',
+        template: 'harvard',
+        design: { fontSize: 'lg' },
+      });
+
+      for (const id of [created.body.id, copy.body.id]) {
+        await http.delete(`${API}/resumes/${id}`).set('Cookie', auth()).expect(204);
+      }
+    });
+
+    it('starts with an empty design', async () => {
+      const created = await http
+        .post(`${API}/resumes`)
+        .set('Cookie', auth())
+        .send({ title: 'Plain' })
+        .expect(201);
+      expect(created.body).toMatchObject({
+        template: 'classic',
+        design: {},
+        content: { custom: [] },
+      });
+      await http.delete(`${API}/resumes/${created.body.id}`).set('Cookie', auth()).expect(204);
+    });
+
+    it('stores custom sections, their place in the order, and link text', async () => {
+      const custom = [
+        {
+          id: 'volunteering',
+          title: 'Volunteering',
+          entries: [
+            {
+              title: 'Mentor',
+              subtitle: 'Code First Girls',
+              date: '2024 – Present',
+              url: 'codefirstgirls.com',
+              urlLabel: 'Website',
+              description: 'Mentored 12 students',
+            },
+          ],
+        },
+        { id: 'k2x9', title: 'Awards', entries: [] },
+      ];
+      const created = await http
+        .post(`${API}/resumes`)
+        .set('Cookie', auth())
+        .send({
+          title: 'Custom',
+          design: { sectionOrder: ['summary', 'custom:volunteering', 'experience'] },
+          content: {
+            projects: [{ name: 'Icons', url: 'github.com/test/icons', urlLabel: 'GitHub' }],
+            custom,
+          },
+        })
+        .expect(201);
+      expect(created.body).toMatchObject({
+        design: { sectionOrder: ['summary', 'custom:volunteering', 'experience'] },
+        content: { projects: [{ urlLabel: 'GitHub' }], custom },
+      });
+      await http.delete(`${API}/resumes/${created.body.id}`).set('Cookie', auth()).expect(204);
+    });
+
+    it.each([
+      ['an unknown template', { template: 'fancy' }],
+      ['a colour that is not hex', { design: { accent: 'red' } }],
+      ['an unknown font', { design: { font: 'comic-sans' } }],
+      ['a repeated section', { design: { sectionOrder: ['skills', 'skills'] } }],
+      ['an unknown section', { design: { sectionOrder: ['hobbies'] } }],
+      ['an unknown language level', { content: { languages: [{ name: 'French', level: 'pro' }] } }],
+      ['a project without a name', { content: { projects: [{ url: 'x.com' }] } }],
+      [
+        'link text over 60 characters',
+        { content: { projects: [{ name: 'X', urlLabel: 'x'.repeat(61) }] } },
+      ],
+      [
+        'a custom section without an id',
+        { content: { custom: [{ title: 'Awards', entries: [] }] } },
+      ],
+      [
+        'a custom section id with spaces',
+        { content: { custom: [{ id: 'my awards', entries: [] }] } },
+      ],
+      [
+        'two custom sections with the same id',
+        {
+          content: {
+            custom: [
+              { id: 'a', entries: [] },
+              { id: 'a', entries: [] },
+            ],
+          },
+        },
+      ],
+      [
+        'more than 10 custom sections',
+        {
+          content: { custom: Array.from({ length: 11 }, (_, i) => ({ id: `s${i}`, entries: [] })) },
+        },
+      ],
+      ['an empty custom section key', { design: { sectionOrder: ['custom:'] } }],
+    ])('rejects %s', async (_, body) => {
+      await http
+        .post(`${API}/resumes`)
+        .set('Cookie', auth())
+        .send({ title: 'Bad', ...body })
+        .expect(400);
+    });
+
+    describe('AI suggestions', () => {
+      const text = 'built the checkout\nmade pages faster';
+
+      it('needs a signed-in user', async () => {
+        await http.post(`${API}/resumes/ai/refine`).send({ field: 'highlights', text }).expect(401);
+      });
+
+      it('is off when no Gemini key is set', async () => {
+        const res = await http
+          .post(`${API}/resumes/ai/refine`)
+          .set('Cookie', auth())
+          .send({ field: 'highlights', text, context: { position: 'Engineer' } })
+          .expect(503);
+        expect(res.body.message).toMatch(/aren’t available/);
+      });
+
+      it.each([
+        ['an unknown field', { field: 'title', text }],
+        ['text that is too short', { field: 'summary', text: '  short  ' }],
+        ['text that is too long', { field: 'highlights', text: 'x'.repeat(5001) }],
+        ['a tiny length limit', { field: 'summary', text, maxLength: 50 }],
+        [
+          'context that is too long',
+          { field: 'summary', text, context: { position: 'x'.repeat(151) } },
+        ],
+      ])('rejects %s', async (_, body) => {
+        await http.post(`${API}/resumes/ai/refine`).set('Cookie', auth()).send(body).expect(400);
+      });
+    });
+  });
+
+  describe('dashboard', () => {
+    const inNewYork = (iso: string) =>
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        weekday: 'short',
+        hour: '2-digit',
+        hourCycle: 'h23',
+      }).format(new Date(iso));
+
+    it("groups weekly activity by the viewer's own weeks", async () => {
+      const ny = await http
+        .get(`${API}/dashboard`)
+        .query({ tz: 'America/New_York' })
+        .set('Cookie', auth())
+        .expect(200);
+      const weeks = ny.body.weekly as { weekStart: string; count: number }[];
+      expect(weeks).toHaveLength(8);
+      expect(weeks.every((w) => inNewYork(w.weekStart) === 'Mon, 00')).toBe(true);
+
+      // Sunday 22:00 in New York is already Monday in UTC.
+      const sundayNight = new Date(new Date(weeks[7].weekStart).getTime() - 2 * 3_600_000);
+      const created = await http
+        .post(`${API}/applications`)
+        .set('Cookie', auth())
+        .send({ role: 'Designer', company: 'Late Night Co', appliedAt: sundayNight.toISOString() })
+        .expect(201);
+
+      const after = await http
+        .get(`${API}/dashboard`)
+        .query({ tz: 'America/New_York' })
+        .set('Cookie', auth())
+        .expect(200);
+      expect(after.body.weekly[6].count).toBe(weeks[6].count + 1);
+      expect(after.body.weekly[7].count).toBe(weeks[7].count);
+
+      await http.delete(`${API}/applications/${created.body.id}`).set('Cookie', auth()).expect(204);
+    });
+
+    it('rejects an unknown time zone', async () => {
+      await http
+        .get(`${API}/dashboard`)
+        .query({ tz: 'Mars/Olympus' })
+        .set('Cookie', auth())
+        .expect(400);
+    });
+  });
+
   describe('agent', () => {
     it('refuses to run while disabled, then queues matches for review', async () => {
       await http.post(`${API}/agent/run`).set('Cookie', auth()).expect(400);
@@ -543,6 +848,321 @@ describe('Joddy API (e2e)', () => {
 
       const summary = await http.get(`${API}/agent/summary`).set('Cookie', auth()).expect(200);
       expect(summary.body).toMatchObject({ SUBMITTED: 1, NEEDS_REVIEW: 0 });
+    });
+
+    it('searches on its own every interval for users who have it on', async () => {
+      const searchDue = () => {
+        const run = spawnSync(process.execPath, ['test/support/match-worker.cjs'], {
+          env: { ...process.env, ...TEST_ENV },
+          encoding: 'utf8',
+          timeout: 60_000,
+        });
+        expect(run.stderr).toBe('');
+        expect(run.status).toBe(0);
+      };
+      const lastRunAt = async () =>
+        (await http.get(`${API}/agent/settings`).set('Cookie', auth()).expect(200)).body
+          .lastRunAt as string;
+      const backdate = () =>
+        db.query(
+          `UPDATE agent_settings SET "lastRunAt" = (now() AT TIME ZONE 'utc') - interval '2 hours'
+           WHERE "userId" = (SELECT id FROM users WHERE email = $1)`,
+          [user.email],
+        );
+      const toChoose = async () => {
+        const res = await http
+          .get(`${API}/agent/tasks`)
+          .query({ status: 'NEEDS_REVIEW' })
+          .set('Cookie', auth())
+          .expect(200);
+        return (res.body.items as { job: { title: string } }[]).map((t) => t.job.title);
+      };
+
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({ jobs: [sampleJob('scheduled', { title: 'Vue Engineer Scheduled' })] })
+        .expect(200);
+
+      // "Find jobs now" in the last test counts as this interval's search.
+      searchDue();
+      expect(await toChoose()).toEqual([]);
+
+      await backdate();
+      searchDue();
+      expect(await toChoose()).toEqual(['Vue Engineer Scheduled']);
+      expect(Date.now() - new Date(await lastRunAt()).getTime()).toBeLessThan(60_000);
+
+      await http
+        .put(`${API}/agent/settings`)
+        .set('Cookie', auth())
+        .send({ enabled: false })
+        .expect(200);
+      await backdate();
+      const before = await lastRunAt();
+      searchDue();
+      expect(await lastRunAt()).toBe(before);
+    });
+  });
+
+  describe('auto-apply', () => {
+    const pdf = Buffer.from('%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n%%EOF\n');
+    const drainWorker = () => {
+      const run = spawnSync(process.execPath, ['test/support/drain-worker.cjs'], {
+        env: { ...process.env, ...TEST_ENV, AUTO_APPLY_SUBMIT: 'true' },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      expect(run.error).toBeUndefined();
+      expect(run.stderr).toBe('');
+      expect(run.status).toBe(0);
+    };
+    const tasksIn = async (status: string) =>
+      (
+        await http
+          .get(`${API}/agent/tasks`)
+          .query({ status, pageSize: 50 })
+          .set('Cookie', auth())
+          .expect(200)
+      ).body.items as Array<{
+        id: string;
+        status: string;
+        error: string | null;
+        missing: unknown[];
+        submittedByAgent: boolean;
+        job: { title: string };
+      }>;
+    const byTitle = (tasks: Awaited<ReturnType<typeof tasksIn>>, title: string) =>
+      tasks.find((t) => t.job.title === title)!;
+
+    it('starts the profile from the account and lists what is missing', async () => {
+      const res = await http.get(`${API}/agent/profile`).set('Cookie', auth()).expect(200);
+      expect(res.body).toMatchObject({
+        firstName: 'Test',
+        lastName: 'User',
+        email: user.email,
+        ready: false,
+        cv: null,
+      });
+      expect(res.body.missing).toEqual(['phone', 'cv', 'consent']);
+    });
+
+    it('validates profile details', async () => {
+      await http
+        .put(`${API}/agent/profile`)
+        .set('Cookie', auth())
+        .send({ phone: 'call me' })
+        .expect(400);
+      await http
+        .put(`${API}/agent/profile`)
+        .set('Cookie', auth())
+        .send({ linkedinUrl: 'linkedin.com/in/me' })
+        .expect(400);
+      await http
+        .put(`${API}/agent/profile`)
+        .set('Cookie', auth())
+        .send({ answers: { 'Why us?': 42 } })
+        .expect(400);
+    });
+
+    it('saves details and consent', async () => {
+      const res = await http
+        .put(`${API}/agent/profile`)
+        .set('Cookie', auth())
+        .send({
+          phone: '+44 7700 900123',
+          city: 'London',
+          country: 'United Kingdom',
+          workCountries: ['United Kingdom', ' United Kingdom '],
+          linkedinUrl: '',
+          consent: true,
+        })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        phone: '+44 7700 900123',
+        workCountries: ['United Kingdom'],
+        linkedinUrl: null,
+        missing: ['cv'],
+      });
+      expect(res.body.consentAt).toEqual(expect.any(String));
+    });
+
+    it('accepts PDF and Word CVs only', async () => {
+      await http
+        .put(`${API}/agent/profile/cv`)
+        .set('Cookie', auth())
+        .attach('file', Buffer.from('hello'), { filename: 'cv.txt', contentType: 'text/plain' })
+        .expect(400);
+      await http.put(`${API}/agent/profile/cv`).set('Cookie', auth()).expect(400);
+
+      const res = await http
+        .put(`${API}/agent/profile/cv`)
+        .set('Cookie', auth())
+        .attach('file', pdf, { filename: 'Test User CV.pdf', contentType: 'application/pdf' })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        ready: true,
+        missing: [],
+        cv: { fileName: 'Test User CV.pdf', mimeType: 'application/pdf', size: pdf.length },
+      });
+
+      const file = await http
+        .get(`${API}/agent/profile/cv`)
+        .set('Cookie', auth())
+        .buffer(true)
+        .parse((r, done) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(file.headers['content-type']).toBe('application/pdf');
+      expect(Buffer.compare(file.body as Buffer, pdf)).toBe(0);
+    });
+
+    it('applies to every match in AUTO mode and hands back what it cannot finish', async () => {
+      await http
+        .put(`${API}/agent/settings`)
+        .set('Cookie', auth())
+        .send({ enabled: true, mode: 'AUTO', keywords: ['engineer'], dailyLimit: 50 })
+        .expect(200);
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({
+          jobs: [
+            sampleJob('submit-1', { title: 'Vue Engineer Submit' }),
+            sampleJob('question-1', { title: 'Vue Engineer Question' }),
+            sampleJob('captcha-1', { title: 'Vue Engineer Captcha' }),
+            sampleJob('crash-1', { title: 'Vue Engineer Crash' }),
+            {
+              ...sampleJob('elsewhere-1', { title: 'Vue Engineer Elsewhere' }),
+              id: 'workable:acme:elsewhere-1',
+              source: 'workable',
+              url: 'https://apply.workable.com/acme/j/1',
+              applyUrl: 'https://apply.workable.com/acme/j/1',
+            },
+          ],
+        })
+        .expect(200);
+      const run = await http.post(`${API}/agent/run`).set('Cookie', auth()).expect(200);
+      expect(run.body.queued).toBe(5);
+
+      const queued = await tasksIn('QUEUED');
+      expect(queued.map((t) => t.job.title).sort()).toEqual([
+        'Vue Engineer Captcha',
+        'Vue Engineer Crash',
+        'Vue Engineer Question',
+        'Vue Engineer Submit',
+      ]);
+      const unsupported = byTitle(await tasksIn('FAILED'), 'Vue Engineer Elsewhere');
+      expect(unsupported.error).toBe('unsupported-site');
+
+      drainWorker();
+
+      const submitted = byTitle(await tasksIn('SUBMITTED'), 'Vue Engineer Submit');
+      expect(submitted.submittedByAgent).toBe(true);
+      const apps = await http
+        .get(`${API}/applications`)
+        .query({ pageSize: 50 })
+        .set('Cookie', auth())
+        .expect(200);
+      expect(apps.body.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ role: 'Vue Engineer Submit', appliedVia: 'AGENT' }),
+        ]),
+      );
+
+      const needsYou = await tasksIn('FAILED');
+      expect(byTitle(needsYou, 'Vue Engineer Captcha').error).toBe('captcha');
+      expect(byTitle(needsYou, 'Vue Engineer Crash').error).toBe('error');
+      const question = byTitle(needsYou, 'Vue Engineer Question');
+      expect(question).toMatchObject({
+        error: 'missing-answers',
+        missing: [
+          {
+            label: 'Are you open to relocation?',
+            kind: 'select',
+            required: true,
+            options: ['Yes', 'No'],
+          },
+        ],
+      });
+    });
+
+    it('lets the user answer the questions Joddy got stuck on, then tries again', async () => {
+      const question = byTitle(await tasksIn('FAILED'), 'Vue Engineer Question');
+      const res = await http
+        .post(`${API}/agent/tasks/${question.id}/answers`)
+        .set('Cookie', auth())
+        .send({ answers: { 'Are you open to relocation?*': 'No' } })
+        .expect(200);
+      expect(res.body).toMatchObject({ status: 'QUEUED', error: null, missing: [] });
+
+      const profile = await http.get(`${API}/agent/profile`).set('Cookie', auth()).expect(200);
+      expect(profile.body.answers).toEqual({ 'are you open to relocation': 'No' });
+
+      drainWorker();
+      const submitted = await tasksIn('SUBMITTED');
+      expect(byTitle(submitted, 'Vue Engineer Question').submittedByAgent).toBe(true);
+    });
+
+    it('only retries jobs on sites Joddy can fill in', async () => {
+      const failed = await tasksIn('FAILED');
+      await http
+        .post(`${API}/agent/tasks/${byTitle(failed, 'Vue Engineer Elsewhere').id}/retry`)
+        .set('Cookie', auth())
+        .expect(400);
+      const retried = await http
+        .post(`${API}/agent/tasks/${byTitle(failed, 'Vue Engineer Captcha').id}/retry`)
+        .set('Cookie', auth())
+        .expect(200);
+      expect(retried.body.status).toBe('QUEUED');
+    });
+
+    it('leaves the queue alone once the user withdraws consent', async () => {
+      await http
+        .put(`${API}/agent/profile`)
+        .set('Cookie', auth())
+        .send({ consent: false })
+        .expect(200);
+      drainWorker();
+      expect(byTitle(await tasksIn('QUEUED'), 'Vue Engineer Captcha').status).toBe('QUEUED');
+    });
+
+    it('waits for the user to pick jobs in REVIEW mode', async () => {
+      await http
+        .put(`${API}/agent/settings`)
+        .set('Cookie', auth())
+        .send({ mode: 'REVIEW' })
+        .expect(200);
+      await http
+        .post(`${API}/jobs/ingest`)
+        .set('x-ingest-key', INGEST_KEY)
+        .send({
+          jobs: [
+            sampleJob('pick-1', { title: 'Vue Engineer Pick' }),
+            {
+              ...sampleJob('pick-2', { title: 'Vue Engineer Pick Elsewhere' }),
+              id: 'workable:acme:pick-2',
+              source: 'workable',
+            },
+          ],
+        })
+        .expect(200);
+      await http.post(`${API}/agent/run`).set('Cookie', auth()).expect(200);
+
+      const toChoose = await tasksIn('NEEDS_REVIEW');
+      const picked = await http
+        .post(`${API}/agent/tasks/${byTitle(toChoose, 'Vue Engineer Pick').id}/approve`)
+        .set('Cookie', auth())
+        .expect(200);
+      expect(picked.body.status).toBe('QUEUED');
+      const elsewhere = await http
+        .post(`${API}/agent/tasks/${byTitle(toChoose, 'Vue Engineer Pick Elsewhere').id}/approve`)
+        .set('Cookie', auth())
+        .expect(200);
+      expect(elsewhere.body).toMatchObject({ status: 'FAILED', error: 'unsupported-site' });
     });
   });
 

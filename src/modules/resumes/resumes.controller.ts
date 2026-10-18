@@ -11,14 +11,28 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
+import { ResumeAiService } from './ai/resume-ai.service';
+import { RefineTextDto } from './dto/refine.dto';
 import { CreateResumeDto, UpdateResumeDto } from './dto/resumes.dto';
 import { ResumesService } from './resumes.service';
 
 @ApiTags('resumes')
 @Controller('resumes')
 export class ResumesController {
-  constructor(private readonly resumes: ResumesService) {}
+  constructor(
+    private readonly resumes: ResumesService,
+    private readonly ai: ResumeAiService,
+  ) {}
+
+  /** Suggests up to two better-worded versions of resume text. Nothing is saved: the user picks one or keeps theirs. */
+  @Post('ai/refine')
+  @Throttle({ default: { limit: 15, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  refine(@CurrentUser() user: AuthUser, @Body() dto: RefineTextDto) {
+    return this.ai.refine(user.id, dto);
+  }
 
   @Get()
   list(@CurrentUser() user: AuthUser) {

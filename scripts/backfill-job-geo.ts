@@ -5,15 +5,15 @@
  *   npm run jobs:backfill-geo
  */
 import 'dotenv/config';
-import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client';
+import { prismaAdapter } from '../src/prisma/adapter';
 import { locationScope } from '../src/modules/jobs/geo/location-scope';
 
 const BATCH = 2000;
 
 async function main() {
   const prisma = new PrismaClient({
-    adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+    adapter: prismaAdapter(process.env.DATABASE_URL),
   });
   const started = Date.now();
   let cursor: string | undefined;

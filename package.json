@@ -10,6 +10,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
+    "start:worker": "node dist/worker.js",
     "start:dev": "tsc-watch -p tsconfig.build.json --onSuccess \"node dist/main.js\"",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma/**/*.ts\"",
@@ -22,6 +23,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "jobs:import": "tsx scripts/import-jobs.ts",
     "jobs:backfill-geo": "tsx scripts/backfill-job-geo.ts",
+    "robot:dry-run": "tsx scripts/robot-dry-run.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -40,10 +42,12 @@
     "compression": "^1.8.2",
     "cookie-parser": "^1.4.7",
     "dotenv": "^18.0.8",
+    "express": "^5.3.0",
     "helmet": "^8.3.0",
     "nestjs-pino": "^5.3.1",
     "pg": "^8.23.1",
     "pino-http": "^11.0.0",
+    "playwright": "^1.64.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.6.7"

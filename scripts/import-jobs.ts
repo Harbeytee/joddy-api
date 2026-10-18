@@ -5,33 +5,10 @@
  *   npm run jobs:import -- ../../job-scraper/data/jobs.jsonl [--limit 5000] [--api http://localhost:4000]
  */
 import 'dotenv/config';
-import { createReadStream } from 'node:fs';
-import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
+import { readFeedBatches } from '../src/modules/jobs/feed/job-feed';
 
 const BATCH_SIZE = 500;
-
-/** Mirrors IngestJobDto's MaxLength limits so one oversized field doesn't reject a whole batch. */
-const MAX_LENGTHS: Record<string, number> = {
-  companyName: 200,
-  title: 300,
-  department: 300,
-  location: 500,
-  employmentType: 100,
-  description: 100_000,
-};
-const MAX_LOCATIONS = 200;
-
-function normalize(job: Record<string, unknown>): Record<string, unknown> {
-  for (const [field, max] of Object.entries(MAX_LENGTHS)) {
-    const value = job[field];
-    if (typeof value === 'string' && value.length > max) job[field] = `${value.slice(0, max - 1)}…`;
-  }
-  if (Array.isArray(job.locations) && job.locations.length > MAX_LOCATIONS) {
-    job.locations = job.locations.slice(0, MAX_LOCATIONS);
-  }
-  return job;
-}
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -96,7 +73,6 @@ function invalidIndexes(err: unknown): Set<number> {
 
 async function main() {
   const startedAt = new Date().toISOString();
-  const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   let batch: unknown[] = [];
   let sent = 0;
   let skipped = 0;
@@ -119,16 +95,12 @@ async function main() {
     batch = [];
   };
 
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    const {
-      isNew: _isNew,
-      firstSeenAt: _firstSeenAt,
-      ...job
-    } = JSON.parse(line) as Record<string, unknown>;
-    batch.push(normalize(job));
-    if (batch.length >= BATCH_SIZE) await flush();
-    if (sent + batch.length >= limit) break;
+  feed: for await (const jobs of readFeedBatches(file, BATCH_SIZE)) {
+    for (const job of jobs) {
+      batch.push(job);
+      if (batch.length >= BATCH_SIZE) await flush();
+      if (sent + batch.length >= limit) break feed;
+    }
   }
   await flush();
   console.log(`\nDone: ${sent} jobs imported${skipped ? `, ${skipped} skipped as invalid` : ''}`);

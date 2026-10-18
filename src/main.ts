@@ -7,9 +7,11 @@ import { AppConfigService } from './config/app-config.service';
 import { API_PREFIX, setupApp } from './setup-app';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    bodyParser: false,
+  });
   app.useLogger(app.get(Logger));
-  app.useBodyParser('json', { limit: '25mb' });
   setupApp(app);
 
   const config = app.get(AppConfigService);

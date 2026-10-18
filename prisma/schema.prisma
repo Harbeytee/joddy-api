@@ -19,13 +19,14 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  sessions      Session[]
-  applications  Application[]
-  resumes       Resume[]
-  savedJobs     SavedJob[]
-  hiddenJobs    HiddenJob[]
-  agentSettings AgentSettings?
-  agentTasks    AgentTask[]
+  sessions         Session[]
+  applications     Application[]
+  resumes          Resume[]
+  savedJobs        SavedJob[]
+  hiddenJobs       HiddenJob[]
+  agentSettings    AgentSettings?
+  agentTasks       AgentTask[]
+  applicantProfile ApplicantProfile?
 
   @@map("users")
 }
@@ -94,6 +95,8 @@ model Job {
   url            String
   applyUrl       String
   postedAt       DateTime?
+  /// The board only gives a date (stored as midnight UTC), so the time of day is unknown
+  postedDateOnly Boolean        @default(false)
   firstSeenAt    DateTime       @default(now())
   lastSeenAt     DateTime       @default(now())
   isActive       Boolean        @default(true)
@@ -207,8 +210,10 @@ model Resume {
   title     String
   isDefault Boolean  @default(false)
   template  String   @default("classic")
-  /// { personal, summary, experience[], education[], skills[] }; validated by the API DTOs
+  /// { personal, summary, experience[], education[], skills[], projects[], certifications[], languages[], interests[] }; validated by the API DTOs
   content   Json
+  /// { accent?, font?, fontSize?, spacing?, sectionOrder? }; unset keys fall back to the template's defaults
+  design    Json     @default("{}")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -220,6 +225,7 @@ model Resume {
   @@map("resumes")
 }
 
+/// REVIEW: the user picks which matches Joddy applies to. AUTO: Joddy applies to every match.
 enum AgentMode {
   REVIEW
   AUTO
@@ -236,38 +242,125 @@ model AgentSettings {
   locations        String[]  @default([])
   remoteOnly       Boolean   @default(false)
   resumeId         String?   @db.Uuid
+  /// When Joddy last looked for matches, on schedule or because the user asked
+  lastRunAt        DateTime?
   updatedAt        DateTime  @updatedAt
 
   user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   resume Resume? @relation(fields: [resumeId], references: [id], onDelete: SetNull)
 
+  @@index([enabled, lastRunAt])
   @@map("agent_settings")
 }
 
+/// NEEDS_REVIEW: waiting for the user to pick it. QUEUED: Joddy will apply. APPLYING: the robot has it.
+/// FAILED: Joddy couldn't finish (see `error` / `missing`), so the user applies themselves.
 enum AgentTaskStatus {
   NEEDS_REVIEW
   QUEUED
+  APPLYING
   SUBMITTED
   FAILED
   SKIPPED
 }
 
 model AgentTask {
-  id          String          @id @default(uuid()) @db.Uuid
-  userId      String          @db.Uuid
-  jobId       String          @db.Uuid
-  status      AgentTaskStatus
-  matchScore  Int
-  matched     String[]        @default([])
-  error       String?
-  submittedAt DateTime?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id               String          @id @default(uuid()) @db.Uuid
+  userId           String          @db.Uuid
+  jobId            String          @db.Uuid
+  status           AgentTaskStatus
+  matchScore       Int
+  matched          String[]        @default([])
+  /// Machine-readable reason the robot stopped, e.g. "missing-answers", "captcha", "unsupported-site"
+  error            String?
+  /// Required questions on the form that Joddy couldn't answer: [{ label, kind, required, options }]
+  missing          Json            @default("[]")
+  attempts         Int             @default(0)
+  /// When the robot claimed the task; lets a crashed run be picked up again
+  startedAt        DateTime?
+  submittedAt      DateTime?
+  /// True when the robot sent the application, false when the user applied themselves
+  submittedByAgent Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@unique([userId, jobId])
   @@index([userId, status])
+  @@index([status, createdAt])
   @@map("agent_tasks")
+}
+
+/// What the auto-apply robot puts into application forms. Email comes from the user's account.
+model ApplicantProfile {
+  userId            String    @id @db.Uuid
+  firstName         String    @default("")
+  lastName          String    @default("")
+  phone             String    @default("")
+  city              String    @default("")
+  country           String    @default("")
+  linkedinUrl       String?
+  websiteUrl        String?
+  /// Countries the user may work in without sponsorship, as written by the user (e.g. "United Kingdom")
+  workCountries     String[]  @default([])
+  noticePeriod      String?
+  salaryExpectation String?
+  /// Answers to form questions the user gave Joddy, keyed by normalised question text
+  answers           Json      @default("{}")
+  /// When the user allowed Joddy to submit applications for them. Null means Joddy never submits.
+  consentAt         DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cv   ApplicantCv?
+
+  @@map("applicant_profiles")
+}
+
+/// Kept apart from the profile so reading the profile never loads the file.
+model ApplicantCv {
+  userId     String   @id @db.Uuid
+  fileName   String
+  mimeType   String
+  size       Int
+  data       Bytes
+  uploadedAt DateTime @default(now())
+
+  profile ApplicantProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("applicant_cvs")
+}
+
+enum JobSyncStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+/// One scheduled scrape + import. Also the lock: at most one RUNNING row can exist.
+model JobSyncRun {
+  id          String        @id @default(uuid()) @db.Uuid
+  status      JobSyncStatus @default(RUNNING)
+  startedAt   DateTime      @default(now())
+  finishedAt  DateTime?
+  imported    Int           @default(0)
+  skipped     Int           @default(0)
+  deactivated Int           @default(0)
+  error       String?
+
+  @@index([startedAt(sort: Desc)])
+  @@map("job_sync_runs")
+}
+
+/// Gemini calls per day (Pacific time, when Google's free quota resets): one row for the whole app and one per user.
+model AiUsage {
+  day   DateTime @db.Date
+  /// "all" for the app-wide count, otherwise a user id
+  scope String
+  count Int      @default(0)
+
+  @@id([day, scope])
+  @@map("ai_usage")
 }

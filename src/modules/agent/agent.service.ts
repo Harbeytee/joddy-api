@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { paginate } from '../../common/dto/pagination.dto';
 import {
   AgentMode,
@@ -10,6 +15,8 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { matchJob } from '../jobs/matching';
 import type { AgentTasksQueryDto, UpdateAgentSettingsDto } from './dto/agent.dto';
+import { ApplicantService } from './applicant.service';
+import { HANDOFF, canAutoApply } from './robot/sites';
 
 /** How far back the agent looks for postings, and how many it scores per run. */
 const LOOKBACK_DAYS = 14;
@@ -29,14 +36,34 @@ const TASK_INCLUDE = {
       salaryInterval: true,
       url: true,
       applyUrl: true,
+      source: true,
       postedAt: true,
+      postedDateOnly: true,
     },
   },
 } satisfies Prisma.AgentTaskInclude;
 
+const STATUS_WORDS: Record<AgentTaskStatus, string> = {
+  NEEDS_REVIEW: 'waiting for you to choose',
+  QUEUED: 'in Joddy’s queue',
+  APPLYING: 'being applied to',
+  SUBMITTED: 'applied to',
+  FAILED: 'waiting for you',
+  SKIPPED: 'skipped',
+};
+
+/** Where a task goes once Joddy has been told to apply: its queue, or straight back to the user. */
+const toApply = (source: string) =>
+  canAutoApply(source)
+    ? { status: AgentTaskStatus.QUEUED, error: null }
+    : { status: AgentTaskStatus.FAILED, error: HANDOFF.unsupportedSite };
+
 @Injectable()
 export class AgentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly applicant: ApplicantService,
+  ) {}
 
   getSettings(userId: string): Promise<AgentSettings> {
     return this.prisma.agentSettings.upsert({ where: { userId }, create: { userId }, update: {} });
@@ -69,7 +96,11 @@ export class AgentService {
   }
 
   async listTasks(userId: string, q: AgentTasksQueryDto) {
-    const where: Prisma.AgentTaskWhereInput = { userId, ...(q.status ? { status: q.status } : {}) };
+    const status =
+      q.status === AgentTaskStatus.QUEUED
+        ? { in: [AgentTaskStatus.APPLYING, AgentTaskStatus.QUEUED] }
+        : q.status;
+    const where: Prisma.AgentTaskWhereInput = { userId, ...(status ? { status } : {}) };
     const [items, total] = await Promise.all([
       this.prisma.agentTask.findMany({
         where,
@@ -85,7 +116,9 @@ export class AgentService {
 
   /**
    * Finds recent jobs matching the user's targeting rules, scores them against
-   * their skills and queues the best ones, up to the daily limit.
+   * their skills and keeps the best ones, up to the daily limit. In AUTO mode
+   * they go straight to Joddy's queue; in REVIEW mode they wait for the user to
+   * pick which ones Joddy applies to.
    */
   async run(userId: string) {
     const settings = await this.getSettings(userId);
@@ -95,6 +128,8 @@ export class AgentService {
         'Add the job titles you want in Job preferences so Joddy knows what to look for',
       );
     }
+
+    await this.prisma.agentSettings.update({ where: { userId }, data: { lastRunAt: new Date() } });
 
     const remaining = settings.dailyLimit - (await this.createdToday(userId));
     if (remaining <= 0) return { queued: 0, scanned: 0, reason: 'daily-limit-reached' as const };
@@ -108,7 +143,7 @@ export class AgentService {
 
     const candidates = await this.prisma.job.findMany({
       where: this.candidateWhere(userId, settings),
-      select: { id: true, title: true, description: true },
+      select: { id: true, title: true, description: true, source: true },
       orderBy: { postedAt: 'desc' },
       take: CANDIDATE_POOL,
     });
@@ -119,13 +154,13 @@ export class AgentService {
       .sort((a, b) => b.match.score - a.match.score)
       .slice(0, remaining);
 
-    const status =
-      settings.mode === AgentMode.AUTO ? AgentTaskStatus.QUEUED : AgentTaskStatus.NEEDS_REVIEW;
     const { count } = await this.prisma.agentTask.createMany({
       data: picks.map((p) => ({
         userId,
         jobId: p.job.id,
-        status,
+        ...(settings.mode === AgentMode.AUTO
+          ? toApply(p.job.source)
+          : { status: AgentTaskStatus.NEEDS_REVIEW }),
         matchScore: p.match.score,
         matched: p.match.matched,
       })),
@@ -134,26 +169,58 @@ export class AgentService {
     return { queued: count, scanned: candidates.length, reason: null };
   }
 
-  approve(userId: string, id: string) {
-    return this.transition(userId, id, [AgentTaskStatus.NEEDS_REVIEW], AgentTaskStatus.QUEUED);
+  /** The user picked this job: Joddy applies to it. */
+  async approve(userId: string, id: string) {
+    const task = await this.findTask(userId, id, [AgentTaskStatus.NEEDS_REVIEW]);
+    return this.update(task.id, { ...toApply(task.job.source), missing: [] });
   }
 
-  skip(userId: string, id: string) {
-    return this.transition(
-      userId,
-      id,
-      [AgentTaskStatus.NEEDS_REVIEW, AgentTaskStatus.QUEUED, AgentTaskStatus.FAILED],
-      AgentTaskStatus.SKIPPED,
-    );
+  /** Puts a job that came back to the user into Joddy's queue again, e.g. after they filled in missing details. */
+  async retry(userId: string, id: string) {
+    const task = await this.findTask(userId, id, [AgentTaskStatus.FAILED]);
+    if (!canAutoApply(task.job.source)) {
+      throw new BadRequestException(
+        'Joddy can’t fill in forms on this site yet. Apply on the company’s website instead.',
+      );
+    }
+    return this.update(task.id, {
+      status: AgentTaskStatus.QUEUED,
+      error: null,
+      missing: [],
+      attempts: 0,
+    });
   }
 
-  /** For when the user applies themselves from the queue; records it in their tracker. */
+  /** Saves the user's answers to the questions Joddy got stuck on, then lets Joddy try again. */
+  async answer(userId: string, id: string, answers: Record<string, string>) {
+    await this.findTask(userId, id, [AgentTaskStatus.FAILED]);
+    await this.applicant.saveAnswers(userId, answers);
+    return this.retry(userId, id);
+  }
+
+  async skip(userId: string, id: string) {
+    const task = await this.findTask(userId, id, [
+      AgentTaskStatus.NEEDS_REVIEW,
+      AgentTaskStatus.QUEUED,
+      AgentTaskStatus.FAILED,
+    ]);
+    return this.update(task.id, { status: AgentTaskStatus.SKIPPED });
+  }
+
+  /** For when the user applies themselves; records it in their tracker. */
   async markApplied(userId: string, id: string) {
     const task = await this.findTask(userId, id);
-    if (task.status === AgentTaskStatus.SUBMITTED) return task;
+    if (task.status === AgentTaskStatus.SUBMITTED) return this.update(task.id, {});
+    this.assertNotApplying(task.status);
+    return this.recordSubmitted(task.id, false);
+  }
 
-    const settings = await this.getSettings(userId);
+  /** Marks a task applied and adds it to the user's application tracker. */
+  async recordSubmitted(id: string, byAgent: boolean) {
+    const task = await this.prisma.agentTask.findUniqueOrThrow({ where: { id } });
+    const settings = await this.getSettings(task.userId);
     const job = await this.prisma.job.findUniqueOrThrow({ where: { id: task.jobId } });
+    const userId = task.userId;
     const [, updated] = await this.prisma.$transaction([
       this.prisma.application.create({
         data: {
@@ -170,36 +237,43 @@ export class AgentService {
       }),
       this.prisma.agentTask.update({
         where: { id },
-        data: { status: AgentTaskStatus.SUBMITTED, submittedAt: new Date(), error: null },
+        data: {
+          status: AgentTaskStatus.SUBMITTED,
+          submittedAt: new Date(),
+          submittedByAgent: byAgent,
+          error: null,
+          missing: [],
+          startedAt: null,
+        },
         include: TASK_INCLUDE,
       }),
     ]);
     return updated;
   }
 
-  private async transition(
-    userId: string,
-    id: string,
-    from: AgentTaskStatus[],
-    to: AgentTaskStatus,
-  ) {
-    const task = await this.findTask(userId, id);
-    if (!from.includes(task.status)) {
-      throw new BadRequestException(
-        `Cannot move a ${task.status.toLowerCase()} task to ${to.toLowerCase()}`,
-      );
-    }
-    return this.prisma.agentTask.update({
-      where: { id },
-      data: { status: to },
-      include: TASK_INCLUDE,
-    });
+  private update(id: string, data: Prisma.AgentTaskUpdateInput) {
+    return this.prisma.agentTask.update({ where: { id }, data, include: TASK_INCLUDE });
   }
 
-  private async findTask(userId: string, id: string) {
-    const task = await this.prisma.agentTask.findFirst({ where: { id, userId } });
+  private async findTask(userId: string, id: string, allowed?: AgentTaskStatus[]) {
+    const task = await this.prisma.agentTask.findFirst({
+      where: { id, userId },
+      include: { job: { select: { source: true } } },
+    });
     if (!task) throw new NotFoundException('Task not found');
+    if (allowed && !allowed.includes(task.status)) {
+      this.assertNotApplying(task.status);
+      throw new BadRequestException(`This job is already ${STATUS_WORDS[task.status]}`);
+    }
     return task;
+  }
+
+  private assertNotApplying(status: AgentTaskStatus) {
+    if (status === AgentTaskStatus.APPLYING) {
+      throw new ConflictException(
+        'Joddy is applying to this job right now. Try again in a minute.',
+      );
+    }
   }
 
   private candidateWhere(userId: string, s: AgentSettings): Prisma.JobWhereInput {

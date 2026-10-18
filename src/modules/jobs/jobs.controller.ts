@@ -13,10 +13,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiHeader, ApiTags } from '@nestjs/swagger';
-import { SkipThrottle } from '@nestjs/throttler';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { OptionalAuth, Public } from '../../common/decorators/public.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
+import { JobAiSearchService } from './ai/job-ai-search.service';
+import { AiSearchDto } from './dto/ai-search.dto';
 import { DeactivateStaleDto, IngestBatchDto } from './dto/ingest.dto';
 import { JobsQueryDto } from './dto/jobs-query.dto';
 import { IngestKeyGuard } from './guards/ingest-key.guard';
@@ -25,12 +27,26 @@ import { JobsService } from './jobs.service';
 @ApiTags('jobs')
 @Controller('jobs')
 export class JobsController {
-  constructor(private readonly jobs: JobsService) {}
+  constructor(
+    private readonly jobs: JobsService,
+    private readonly aiSearch: JobAiSearchService,
+  ) {}
 
   @OptionalAuth()
   @Get()
   list(@CurrentUser() user: AuthUser | undefined, @Query() q: JobsQueryDto) {
     return this.jobs.list(user?.id, q);
+  }
+
+  /**
+   * Turns a prompt into job search filters; list the jobs with `GET /jobs` and those filters.
+   * `GET /ai/status` says whether it's on. Needs an account so Gemini calls count against a user's daily limit.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('ai-search')
+  @HttpCode(HttpStatus.OK)
+  aiSearchInterpret(@CurrentUser() user: AuthUser, @Body() dto: AiSearchDto) {
+    return this.aiSearch.interpret(user.id, dto.prompt, dto.homeCountry);
   }
 
   @Get('saved')

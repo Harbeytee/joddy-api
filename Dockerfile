@@ -43,3 +43,14 @@ HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4000)+'/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "dist/main.js"]
+
+# ---- worker: the apply worker, with the Chromium it drives
+FROM runtime AS worker
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/* \
+  && chown -R node:node /ms-playwright
+USER node
+HEALTHCHECK NONE
+CMD ["node", "dist/worker.js"]

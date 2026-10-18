@@ -1,7 +1,12 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
-import type { CreateResumeDto, ResumeContentDto, UpdateResumeDto } from './dto/resumes.dto';
+import type {
+  CreateResumeDto,
+  ResumeContentDto,
+  ResumeDesignDto,
+  UpdateResumeDto,
+} from './dto/resumes.dto';
 
 const EMPTY_CONTENT: ResumeContentDto = {
   personal: {},
@@ -9,6 +14,11 @@ const EMPTY_CONTENT: ResumeContentDto = {
   experience: [],
   education: [],
   skills: [],
+  projects: [],
+  certifications: [],
+  languages: [],
+  interests: [],
+  custom: [],
 };
 
 @Injectable()
@@ -36,7 +46,8 @@ export class ResumesService {
         title: dto.title,
         template: dto.template,
         isDefault: isFirst,
-        content: toJson({ ...EMPTY_CONTENT, ...dto.content }),
+        content: withDefaults(dto.content ?? {}),
+        design: toJson(dto.design ?? {}),
       },
     });
   }
@@ -48,7 +59,8 @@ export class ResumesService {
       data: {
         title: dto.title,
         template: dto.template,
-        content: dto.content ? toJson({ ...EMPTY_CONTENT, ...dto.content }) : undefined,
+        content: dto.content ? withDefaults(dto.content) : undefined,
+        design: dto.design ? toJson(dto.design) : undefined,
       },
     });
   }
@@ -61,6 +73,7 @@ export class ResumesService {
         title: `${source.title} (copy)`.slice(0, 100),
         template: source.template,
         content: source.content as Prisma.InputJsonValue,
+        design: source.design as Prisma.InputJsonValue,
       },
     });
   }
@@ -91,5 +104,14 @@ export class ResumesService {
   }
 }
 
-const toJson = (content: ResumeContentDto) =>
-  JSON.parse(JSON.stringify(content)) as Prisma.InputJsonValue;
+/** Round-trips through JSON so class-transformer instances and undefined keys don't reach Prisma. */
+const toJson = (value: ResumeContentDto | ResumeDesignDto) =>
+  JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+
+/** DTO instances carry every declared field, set to undefined when omitted, so strip those before merging. */
+function withDefaults(content: ResumeContentDto) {
+  const ids = (content.custom ?? []).map((s) => s.id);
+  if (new Set(ids).size !== ids.length)
+    throw new BadRequestException('Each custom section needs its own id');
+  return toJson({ ...EMPTY_CONTENT, ...(toJson(content) as ResumeContentDto) });
+}
