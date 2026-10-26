@@ -16,7 +16,7 @@
 - **Resume builder.** Stores resumes as structured content with 24 templates and design settings. Gemini suggests better wording without inventing anything.
 - **Auto-apply agent.** A background worker:
   - finds jobs that match each user;
-  - fills in Greenhouse and Lever application forms in a headless browser, using the user's details and CV;
+  - fills in Greenhouse, Lever and Ashby application forms in a headless browser, using the user's details and CV;
   - hands anything it can't answer with certainty back to the user.
 - **Accounts.** Cookie-based sessions with rotating refresh tokens, password changes and account deletion.
 
@@ -91,7 +91,7 @@ npm run jobs:backfill-geo
 | `start:dev`                     | Compile in watch mode and restart on change                                                               |
 | `build` / `start`               | Production build to `dist/` and run it                                                                    |
 | `start:worker`                  | Run the worker from `dist/`: apply robot (needs Chromium: `npx playwright install chromium`) and job sync |
-| `robot:dry-run`                 | Fill real Greenhouse / Lever forms with a sample applicant, without submitting                            |
+| `robot:dry-run`                 | Fill real Greenhouse / Lever / Ashby forms with a sample applicant, without submitting                    |
 | `test`                          | Unit tests                                                                                                |
 | `test:e2e`                      | Builds the API, starts it against `joddy_test` (or `TEST_DATABASE_URL`) and tests it over HTTP            |
 | `lint` / `typecheck` / `format` | Code quality                                                                                              |
@@ -122,7 +122,7 @@ src/
     resumes/        resume documents (JSON content + template), AI wording suggestions (ai/)
     ai/             Gemini client, answer cache and GET /ai/status, shared by jobs and resumes
     agent/          auto-apply settings, matching runs, task queue, applicant profile,
-                    apply worker and the Greenhouse / Lever form robot (robot/)
+                    apply worker and the Greenhouse / Lever / Ashby form robot (robot/)
     dashboard/      aggregated home-page data
     health/         liveness / readiness probes
 ```
@@ -172,7 +172,7 @@ A search scans the newest matching jobs and scores them against the user's skill
 
 The **worker** (`npm run start:worker`, a separate process with no HTTP server) runs the scheduled searches and takes `QUEUED` tasks one at a time, opens the job's form in headless Chromium and fills it in from the user's applicant profile (`GET/PUT /agent/profile`, CV via `PUT /agent/profile/cv`). It only picks up tasks for users who turned the agent on, uploaded a CV, filled in their name and phone, and gave consent. Several workers can run at once; each claims a task with `FOR UPDATE SKIP LOCKED`, and tasks left mid-way by a crashed worker are picked up again after 15 minutes (three tries at most).
 
-Form fillers exist for **Greenhouse** and **Lever** (`modules/agent/robot/`). Jobs on other sites, and anything the robot can't finish safely, go back to the user as `FAILED` ("Needs you" in the app) with a reason in `error`:
+Form fillers exist for **Greenhouse**, **Lever** and **Ashby** (`modules/agent/robot/`). Jobs on other sites, and anything the robot can't finish safely, go back to the user as `FAILED` ("Needs you" in the app) with a reason in `error`:
 
 | `error`            | Meaning                                                                         |
 | ------------------ | ------------------------------------------------------------------------------- |

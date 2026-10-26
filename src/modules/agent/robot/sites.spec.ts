@@ -1,3 +1,4 @@
+import { ashbyFormUrl } from './ashby';
 import { greenhouseFormUrl } from './greenhouse';
 import { SITE_FORMS } from './index';
 import { leverFormUrl } from './lever';
@@ -50,6 +51,37 @@ describe('leverFormUrl', () => {
       'https://jobs.lever.co/acme/abc/apply',
     );
     expect(leverFormUrl({ applyUrl: 'https://acme.com/jobs/1', url: '' })).toBeNull();
+  });
+});
+
+describe('ashbyFormUrl', () => {
+  const id = '7458d4e9-da2e-47bd-98cb-adfda43d42b2';
+
+  it('points at the application tab of the posting', () => {
+    expect(
+      ashbyFormUrl({
+        externalId: `ashby:acme:${id}`,
+        applyUrl: `https://jobs.ashbyhq.com/acme/${id}/application`,
+        url: `https://jobs.ashbyhq.com/acme/${id}`,
+      }),
+    ).toBe(`https://jobs.ashbyhq.com/acme/${id}/application`);
+    expect(
+      ashbyFormUrl({ externalId: '', applyUrl: '', url: `https://jobs.ashbyhq.com/acme/${id}` }),
+    ).toBe(`https://jobs.ashbyhq.com/acme/${id}/application`);
+  });
+
+  it('falls back to the job id for postings on a company’s own site', () => {
+    expect(
+      ashbyFormUrl({
+        externalId: `ashby:acme:${id}`,
+        applyUrl: '',
+        url: `https://acme.com/careers?ashby_jid=${id}`,
+      }),
+    ).toBe(`https://jobs.ashbyhq.com/acme/${id}/application`);
+  });
+
+  it('refuses ids it cannot parse', () => {
+    expect(ashbyFormUrl({ externalId: 'ashby:acme:123', applyUrl: '', url: '' })).toBeNull();
   });
 });
 

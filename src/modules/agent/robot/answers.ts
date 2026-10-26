@@ -164,7 +164,7 @@ const text = (q: Question, value: string | null | undefined) =>
   value && isTyped(q) ? value : null;
 
 const MARKETING =
-  /future (roles|opportunit|vacanc|positions|openings)|contact(ing)? me (in|about) (the )?future|talent (pool|community|network)|newsletter|marketing|job alerts|retain my (data|information|details|materials)|future (hiring|recruitment)/;
+  /future (roles|opportunit|vacanc|positions|openings)|contact(ing)? me (in|about) (the )?future|contact (me|you) about (other |new )?(job )?opportunit|talent (pool|community|network)|newsletter|marketing|job alerts|retain my (data|information|details|materials)|future (hiring|recruitment)/;
 const ACKNOWLEDGE = /(read|understood|understand|acknowledge|agree|accept|confirm)/;
 const POLICY = /privacy|notice|policy|terms|data protection|gdpr/;
 

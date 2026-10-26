@@ -1,5 +1,5 @@
 /** Job sources whose application forms the robot can fill in. */
-export const AUTO_APPLY_SOURCES: ReadonlySet<string> = new Set(['greenhouse', 'lever']);
+export const AUTO_APPLY_SOURCES: ReadonlySet<string> = new Set(['ashby', 'greenhouse', 'lever']);
 
 export const canAutoApply = (source: string) => AUTO_APPLY_SOURCES.has(source);
 

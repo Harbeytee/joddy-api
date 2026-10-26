@@ -112,6 +112,12 @@ describe('answerFor', () => {
     expect(box('I consent to retain my materials for future hiring purposes', false)).toBeNull();
     expect(box('I consent to joining the talent community', true)).toBeNull();
     expect(
+      box(
+        'Do you agree to allow Acme to contact you about job opportunities for up to 1 year? Recruiting Privacy Policy',
+        true,
+      ),
+    ).toBeNull();
+    expect(
       choose('I confirm that I have read and understood the Candidate Privacy Notice', ['Yes']),
     ).toBe('Yes');
     expect(
